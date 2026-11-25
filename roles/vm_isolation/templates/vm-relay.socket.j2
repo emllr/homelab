@@ -1,0 +1,15 @@
+# {{ ansible_managed }}
+[Unit]
+Description=VM relay {{ item.name }}: {{ [item.allow_from] | flatten | join(', ') }} -> {{ item.listen }} -> {{ item.target }}
+# Start after our firewall so the source restriction is in place first.
+After=vm-isolation-firewall.service
+Requires=vm-isolation-firewall.service
+
+[Socket]
+ListenStream={{ item.listen }}
+# The listen address lives on a libvirt bridge that may not exist yet.
+FreeBind=yes
+NoDelay=yes
+
+[Install]
+WantedBy=sockets.target

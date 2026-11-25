@@ -1,0 +1,224 @@
+---
+# Isolation for internet-facing VMs.
+#
+# This role sets up hv1's side only. Moving each guest onto its network
+# and pinning SPICE ports are one-time domain edits done by hand (runbook).
+
+# ---- nftables drop rules (table inet vm_isolation) -----------------------
+
+- name: Install vm isolation nft ruleset
+  ansible.builtin.template:
+    src: vm-isolation.nft.j2
+    dest: /etc/vm-isolation.nft
+    owner: root
+    group: root
+    mode: '0644'
+    validate: 'nft -c -f %s'
+  notify: reload vm isolation firewall
+
+- name: Install vm isolation firewall unit
+  ansible.builtin.template:
+    src: vm-isolation-firewall.service.j2
+    dest: /etc/systemd/system/vm-isolation-firewall.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: reload vm isolation firewall
+
+- name: Enable and start vm isolation firewall
+  ansible.builtin.systemd:
+    name: vm-isolation-firewall
+    enabled: true
+    state: started
+    daemon_reload: true
+  # Depends on files/objects created earlier in the run; can't succeed in --check.
+  ignore_errors: "{{ ansible_check_mode }}"
+
+# ---- libvirt isolated networks ------------------------------------------
+
+# community.libvirt.virt_net `command: define` only creates networks that don't
+# exist yet; it ignores changes to existing ones. So render each definition to a file
+# (keeping the network's UUID, which libvirt requires to redefine it) and run
+# `virsh net-define` whenever that file changes.
+- name: Look up existing isolated network UUIDs
+  ansible.builtin.command: virsh -c qemu:///system net-uuid {{ net.name }}
+  register: isolated_net_uuid
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  loop: "{{ vm_isolated_networks }}"
+  loop_control:
+    loop_var: net
+    label: "{{ net.name }}"
+
+- name: Ensure isolated network definition directory exists
+  ansible.builtin.file:
+    path: /etc/libvirt/vm-isolation
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Render isolated network definitions
+  ansible.builtin.template:
+    src: virt-isolated-net.xml.j2
+    dest: "/etc/libvirt/vm-isolation/{{ item.net.name }}.xml"
+    owner: root
+    group: root
+    mode: '0644'
+  vars:
+    net: "{{ item.net }}"
+    net_uuid: "{{ item.stdout | default('') }}"
+  loop: "{{ isolated_net_uuid.results }}"
+  loop_control:
+    label: "{{ item.net.name }}"
+  register: isolated_net_xml
+
+- name: Define isolated networks (new or changed)
+  ansible.builtin.command: virsh -c qemu:///system net-define /etc/libvirt/vm-isolation/{{ item.item.net.name }}.xml
+  when: item.changed
+  loop: "{{ isolated_net_xml.results }}"
+  loop_control:
+    label: "{{ item.item.net.name }}"
+  # A running network only picks up the new definition after a restart, which
+  # detaches its guests' NICs. See the comment under "Start isolated networks".
+
+- name: Enable isolated network autostart
+  community.libvirt.virt_net:
+    name: "{{ net.name }}"
+    autostart: true
+  loop: "{{ vm_isolated_networks }}"
+  loop_control:
+    loop_var: net
+    label: "{{ net.name }}"
+  # Depends on files/objects created earlier in the run; can't succeed in --check.
+  ignore_errors: "{{ ansible_check_mode }}"
+
+- name: Start isolated networks
+  community.libvirt.virt_net:
+    name: "{{ net.name }}"
+    state: active
+  loop: "{{ vm_isolated_networks }}"
+  loop_control:
+    loop_var: net
+    label: "{{ net.name }}"
+  # Depends on files/objects created earlier in the run; can't succeed in --check.
+  ignore_errors: "{{ ansible_check_mode }}"
+
+# libvirt only applies a changed definition to a running network after a restart,
+# and running guests are NOT reattached. Done by hand:
+#   virsh net-destroy <net> && virsh net-start <net>
+#   ip link set <vnetX> master <bridge> && bridge link set dev <vnetX> isolated on
+# (find vnetX with `virsh domiflist <vm>`)
+
+# ---- ufw: allow what should pass (nft above already drops everything else) --
+
+- name: Allow isolated-network guest DHCP to host
+  community.general.ufw:
+    rule: allow
+    direction: in
+    interface: "{{ net.bridge }}"
+    proto: udp
+    port: '67'
+    comment: "{{ net.name }} DHCP"
+  loop: "{{ vm_isolated_networks }}"
+  loop_control:
+    loop_var: net
+    label: "{{ net.name }}"
+
+- name: Allow isolated-network guest DNS to host
+  community.general.ufw:
+    rule: allow
+    direction: in
+    interface: "{{ item.0.bridge }}"
+    to_ip: "{{ item.0.gateway }}"
+    proto: "{{ item.1 }}"
+    port: '53'
+    comment: "{{ item.0.name }} DNS"
+  loop: "{{ vm_isolated_networks | product(['udp', 'tcp']) | list }}"
+  loop_control:
+    label: "{{ item.0.name }} {{ item.1 }}"
+
+- name: Allow isolated-network host services
+  community.general.ufw:
+    rule: allow
+    direction: in
+    interface: "{{ item.0.bridge }}"
+    from_ip: "{{ item.1.from }}"
+    to_ip: "{{ item.0.gateway }}"
+    proto: "{{ item.1.proto }}"
+    port: "{{ item.1.port | string }}"
+    comment: "{{ item.0.name }} host service"
+  loop: "{{ vm_isolated_networks | subelements('host_services') }}"
+  loop_control:
+    label: "{{ item.0.name }} {{ item.1.port }}"
+
+- name: Allow isolated-network guests out (filtered further by nft)
+  community.general.ufw:
+    rule: allow
+    route: true
+    interface_in: "{{ net.bridge }}"
+    interface_out: "{{ net.wan_if }}"
+    from_ip: "{{ net.cidr }}"
+    comment: "{{ net.name }} egress"
+  loop: "{{ vm_isolated_networks }}"
+  loop_control:
+    loop_var: net
+    label: "{{ net.name }}"
+
+- name: Allow relay clients
+  community.general.ufw:
+    rule: allow
+    direction: in
+    interface: "{{ item.0.listen_if }}"
+    from_ip: "{{ item.1 }}"
+    to_ip: "{{ item.0.listen.split(':')[0] }}"
+    proto: tcp
+    port: "{{ item.0.listen.split(':')[1] }}"
+    comment: "relay {{ item.0.name }}"
+  loop: "{{ relay_clients }}"
+  loop_control:
+    label: "{{ item.0.name }} {{ item.1 }}"
+  vars:
+    relay_clients: >-
+      {% set out = [] %}{% for r in vm_relays %}{% for a in ([r.allow_from] | flatten) %}{{ out.append([r, a]) }}{% endfor %}{% endfor %}{{ out }}
+
+# ---- relays (systemd-socket-proxyd) ---------------------------------------
+
+- name: Install relay socket units
+  ansible.builtin.template:
+    src: vm-relay.socket.j2
+    dest: "/etc/systemd/system/vm-relay-{{ item.name }}.socket"
+    owner: root
+    group: root
+    mode: '0644'
+  loop: "{{ vm_relays }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: relay_socket_units
+  notify: restart vm relays
+
+- name: Install relay service units
+  ansible.builtin.template:
+    src: vm-relay.service.j2
+    dest: "/etc/systemd/system/vm-relay-{{ item.name }}.service"
+    owner: root
+    group: root
+    mode: '0644'
+  loop: "{{ vm_relays }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: relay_service_units
+  notify: restart vm relays
+
+- name: Enable and start relay sockets
+  ansible.builtin.systemd:
+    name: "vm-relay-{{ item.name }}.socket"
+    enabled: true
+    state: started
+    daemon_reload: true
+  loop: "{{ vm_relays }}"
+  loop_control:
+    label: "{{ item.name }}"
+  # Depends on files/objects created earlier in the run; can't succeed in --check.
+  ignore_errors: "{{ ansible_check_mode }}"

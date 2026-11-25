@@ -1,0 +1,19 @@
+---
+# CrowdSec agent (+ local API) per host, from CrowdSec's official repo.
+crowdsec_repo_dist: "{{ 'bookworm' if ansible_facts['distribution'] == 'Debian' else ansible_facts['distribution_release'] }}"
+crowdsec_repo_os: "{{ ansible_facts['distribution'] | lower }}"      # debian | ubuntu
+crowdsec_firewall_bouncer: false     # true on hosts reached directly from the internet (edge1)
+# Behind a Cloudflare tunnel, every request arrives from cloudflared on loopback. Trust its
+# CF-Connecting-IP header from loopback only, so web logs (and CrowdSec) see the real client.
+crowdsec_realip: ""                  # "" | nginx | apache
+crowdsec_whitelist_cidrs: "{{ homelab_trusted_cidrs }}"   # inventory.yml (all.vars)
+# Let these addresses reach this host's local API (port 8080) from outside, e.g. hv1
+# (10.50.150.1) for crowdsec_cf_sync. Empty = LAPI on loopback only.
+crowdsec_lapi_remote_allow: []
+# Read-only bouncer keys to register, e.g. for the sync job on hv1. Keys come from
+# the vault: vault_crowdsec_lapi_keys[<host>].
+crowdsec_remote_bouncer: ""          # bouncer name, "" = none
+# Sites served straight from an app (cloudflared -> app) get an nginx front for an access log:
+# { listen: "127.0.0.1:8090", upstream: "http://127.0.0.1:3000" }. Point the tunnel's public
+# hostname at the listen address afterwards. Headers pass through unchanged.
+crowdsec_nginx_front: {}

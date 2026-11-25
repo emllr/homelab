@@ -1,0 +1,26 @@
+# {{ ansible_managed }}
+[Unit]
+Description=nftables rules isolating internet-facing VMs (table inet vm_isolation)
+# Must be in place before any guest starts.
+Before=libvirtd.service virtqemud.service network-pre.target
+Wants=network-pre.target
+DefaultDependencies=no
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/nft -f /etc/vm-isolation.nft
+ExecReload=/usr/bin/nft -f /etc/vm-isolation.nft
+{% for net in vm_isolated_networks if net.route_table is defined %}
+# {{ net.name }}: route traffic from {{ net.bridge }} via table {{ net.route_table }} ({{ net.wan_if }})
+ExecStartPost=-/usr/bin/ip rule del iif {{ net.bridge }} lookup {{ net.route_table }}
+ExecStartPost=/usr/bin/ip rule add iif {{ net.bridge }} lookup {{ net.route_table }}
+ExecReload=-/usr/bin/ip rule del iif {{ net.bridge }} lookup {{ net.route_table }}
+ExecReload=/usr/bin/ip rule add iif {{ net.bridge }} lookup {{ net.route_table }}
+{% endfor %}
+# No ExecStop on purpose: stopping this unit must not silently drop isolation.
+# To remove deliberately: nft delete table inet vm_isolation
+
+[Install]
+WantedBy=multi-user.target

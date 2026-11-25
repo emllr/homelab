@@ -1,0 +1,7 @@
+[Unit]
+Description=Daily snapshot of db1's pgBackRest repo (after the 04:30 Eastern backup)
+[Timer]
+OnCalendar=*-*-* 05:30:00
+Persistent=true
+[Install]
+WantedBy=multi-user.target

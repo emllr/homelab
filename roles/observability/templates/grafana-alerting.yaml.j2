@@ -1,0 +1,487 @@
+# {{ ansible_managed }}
+# Alerts -> ntfy on edge1 (https://ntfy.example.net/homelab-alerts). Grafana's ntfy user can
+# only publish to that topic. ntfy's built-in "grafana" template formats the webhook.
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: ntfy
+    receivers:
+      - uid: ntfy-homelab
+        type: webhook
+        disableResolveMessage: false
+        settings:
+          url: "{{ obs_ntfy_url }}?template=grafana&priority={{ obs_ntfy_priority_default }}"
+          httpMethod: POST
+          authorization_scheme: Bearer
+          authorization_credentials: "{{ vault_ntfy_grafana_token }}"
+  # severity=critical: high-priority push
+  - orgId: 1
+    name: ntfy-critical
+    receivers:
+      - uid: ntfy-homelab-critical
+        type: webhook
+        disableResolveMessage: false
+        settings:
+          url: "{{ obs_ntfy_url }}?template=grafana&priority={{ obs_ntfy_priority_critical }}"
+          httpMethod: POST
+          authorization_scheme: Bearer
+          authorization_credentials: "{{ vault_ntfy_grafana_token }}"
+
+policies:
+  - orgId: 1
+    receiver: ntfy
+    group_by: [grafana_folder, alertname]
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+    routes:
+      - receiver: ntfy-critical
+        object_matchers: [["severity", "=", "critical"]]
+
+groups:
+  - orgId: 1
+    name: homelab-core
+    folder: Homelab
+    interval: 1m
+    rules:
+      - uid: telemetry-hv1-stopped
+        title: Telemetry from hv1 stopped
+        condition: C
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning }
+        annotations:
+          summary: "No host metrics from hv1 for 5+ minutes (Alloy down, or obs1 unreachable)."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prom
+            model:
+              refId: A
+              instant: true
+              expr: 'absent_over_time(node_uname_info{host_name="hv1"}[5m]) or vector(0)'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions: [{ evaluator: { type: gt, params: [0] } }]
+
+      - uid: obs1-data-disk
+        title: obs1 data disk above 80%
+        condition: C
+        for: 15m
+        noDataState: NoData
+        execErrState: Error
+        labels: { severity: warning }
+        annotations:
+          summary: "/srv/obs on obs1 is above 80%. Retention may need tuning or the disk may need growing."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prom
+            model:
+              refId: A
+              instant: true
+              expr: '100 * (1 - node_filesystem_avail_bytes{host_name="obs1", mountpoint="/srv/obs"} / node_filesystem_size_bytes{host_name="obs1", mountpoint="/srv/obs"})'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions: [{ evaluator: { type: gt, params: [80] } }]
+
+      - uid: otelcol-refusing
+        title: Collector refusing or failing telemetry
+        condition: C
+        for: 10m
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning }
+        annotations:
+          summary: "The OTel Collector on obs1 has been refusing or failing to export data for 10+ minutes."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prom
+            model:
+              refId: A
+              instant: true
+              expr: 'sum(rate(otelcol_receiver_refused_metric_points[5m])) + sum(rate(otelcol_receiver_refused_log_records[5m])) + (sum(rate(otelcol_exporter_send_failed_metric_points[5m])) or vector(0)) + (sum(rate(otelcol_exporter_send_failed_log_records[5m])) or vector(0))'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions: [{ evaluator: { type: gt, params: [0] } }]
+
+      - uid: suricata-high-severity
+        title: Suricata high-severity alert
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: critical }
+        annotations:
+          summary: "Suricata raised a severity-1 alert on an isolated VM network. Check the Live dashboard / Loki {service_name=\"suricata\"}."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: loki
+            model:
+              refId: A
+              queryType: instant
+              expr: 'sum(count_over_time({service_name="suricata"} | json | event_type="alert" | alert_severity="1" | alert_signature !~ "ET INFO.*" [5m])) or vector(0)'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions: [{ evaluator: { type: gt, params: [0] } }]
+
+      # Named-CVE exploit attempts (and the two RCE scenarios without "cve" in the name) caught by
+      # CrowdSec on web2, web3 or edge1. Routine bans (ssh brute force, scans, probing,
+      # http-cve-probing) stay on the dashboard only. web2/web3 have no bouncer: detection only.
+      - uid: crowdsec-exploit-attempt
+        title: CrowdSec exploit attempt
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning }
+        annotations:
+          summary: "CrowdSec saw a known-CVE exploit attempt. Usually just a scanner; check the Live dashboard (CrowdSec panels) for the source IP and target host."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: loki
+            model:
+              refId: A
+              queryType: instant
+              expr: |-
+                sum by (host_name) (count_over_time({service_name="journald"} | unit="crowdsec.service" |~ `(?i)performed '[^']*(cve-[0-9]|_rce|vmsa-)` [5m])) or vector(0)
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions: [{ evaluator: { type: gt, params: [0] } }]
+
+      - uid: edge1-memory-low
+        title: edge1 low on memory
+        condition: C
+        for: 10m
+        noDataState: NoData
+        execErrState: Error
+        labels: { severity: warning }
+        annotations:
+          summary: "edge1 (961 MB RAM, no swap) has had under 128 MB available for 10+ minutes. CrowdSec, Alloy, ntfy and nginx share it."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prom
+            model:
+              refId: A
+              instant: true
+              expr: 'node_memory_MemAvailable_bytes{host_name="edge1"} / 1048576'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions: [{ evaluator: { type: lt, params: [128] } }]
+
+      # crowdsec-cf-sync on hv1 logs "sync ok" every successful minute (dry run included).
+      - uid: crowdsec-cf-sync-stalled
+        title: CrowdSec to Cloudflare sync not succeeding
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Error
+        labels: { severity: warning }
+        annotations:
+          summary: "crowdsec-cf-sync on hv1 hasn't completed a successful run for 15+ minutes; Cloudflare's ban lists are going stale. journalctl -u crowdsec-cf-sync on hv1."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: loki
+            model:
+              refId: A
+              queryType: instant
+              expr: 'sum(count_over_time({service_name="journald"} | host_name="hv1" | unit="crowdsec-cf-sync.service" |= "sync ok" [15m])) or vector(0)'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions: [{ evaluator: { type: lt, params: [1] } }]
+
+  # exampleapp app + public sites. Expressions return a value only when something is wrong,
+  # except where the threshold is stated. The raw block below keeps Grafana's label templates away from Jinja.
+{% raw %}
+  - orgId: 1
+    name: exampleapp
+    folder: Homelab
+    interval: 1m
+    rules:
+      - uid: pg-down
+        title: "Postgres down"
+        condition: C
+        for: 3m
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: critical }
+        annotations:
+          summary: "Postgres on {{ $labels.host_name }} is not answering the exporter (pg_up=0). Dashboard: Postgres."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prom
+            model:
+              refId: A
+              instant: true
+              expr: 'min by (host_name) (pg_up{job="integrations/postgres"})'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions: [{ evaluator: { type: lt, params: [1] } }]
+
+      - uid: pg-replica-lag
+        title: "Postgres replica lagging"
+        condition: C
+        for: 10m
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.host_name }} replays WAL {{ $values.A }} s behind its primary."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prom
+            model:
+              refId: A
+              instant: true
+              expr: 'max by (host_name) (pg_replication_lag_seconds{job="integrations/postgres"} and on (host_name) pg_replication_is_replica == 1)'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions: [{ evaluator: { type: gt, params: [300] } }]
+
+      - uid: pg-nas1-disconnected
+        title: "Postgres replica on nas1 disconnected"
+        condition: C
+        for: 15m
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning }
+        annotations:
+          summary: "nas1's replica isn't streaming from db1. db1 keeps WAL for it up to 80 GB, then the replica must be re-seeded. "
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prom
+            model:
+              refId: A
+              instant: true
+              expr: 'min by (host_name) (pg_replication_slots_active{slot_name="nas1"}) or 0 * max by (host_name) (pg_up{host_name="db1"} == 1)'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions: [{ evaluator: { type: lt, params: [1] } }]
+
+      - uid: pg-nas1-behind
+        title: "Postgres replica on nas1 behind"
+        condition: C
+        for: 10m
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning }
+        annotations:
+          summary: "nas1's replica is more than 2 GB of WAL behind db1 (db1 drops its slot's WAL at 80 GB). "
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prom
+            model:
+              refId: A
+              instant: true
+              expr: 'max by (host_name) ({__name__=~"pg_replication_slots_pg_wal_lsn_diff|pg_stat_replication_pg_wal_lsn_diff", host_name="db1", slot_name!=""})'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions: [{ evaluator: { type: gt, params: [2147483648] } }]
+
+      - uid: pg-archive-failing
+        title: "Postgres WAL archiving failing"
+        condition: C
+        for: 15m
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning }
+        annotations:
+          summary: "pgBackRest on db1 can't archive WAL to every repository (repo1 local, repo2 nas1), so WAL piles up in pg_wal. Check pgbackrest --stanza=exampleapp check on db1."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prom
+            model:
+              refId: A
+              instant: true
+              expr: 'max by (host_name) (increase(pg_stat_archiver_failed_count{host_name="db1"}[10m]))'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions: [{ evaluator: { type: gt, params: [0] } }]
+
+      - uid: pg-disk
+        title: "Postgres disk filling up"
+        condition: C
+        for: 15m
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.host_name }} {{ $labels.mountpoint }} is over 80% full."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prom
+            model:
+              refId: A
+              instant: true
+              expr: 'max by (host_name, mountpoint) (1 - node_filesystem_avail_bytes{host_name="db1", mountpoint=~"/var/lib/postgresql|/var/lib/pgbackrest"} / node_filesystem_size_bytes{host_name="db1", mountpoint=~"/var/lib/postgresql|/var/lib/pgbackrest"})'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions: [{ evaluator: { type: gt, params: [0.8] } }]
+
+      # Fires on the absence of a successful check, so a dead timer on nas1 or on db1 is caught too.
+      - uid: pg-nas1-snapshots
+        title: "nas1 backup snapshots stale"
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning }
+        annotations:
+          summary: "nas1's daily snapshot of the Postgres backup repo is over 26 h old, or the hourly check on db1 hasn't succeeded for 3 h. On nas1: systemctl list-timers; if db1-repo-snapshot is gone, rerun tools/nas1-postgres/deploy.sh. On db1: journalctl -u nas1-snapshot-check."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 10800, to: 0 }
+            datasourceUid: loki
+            model:
+              refId: A
+              queryType: instant
+              expr: 'sum(count_over_time({service_name="journald"} | host_name="db1" | unit="nas1-snapshot-check.service" |= "ok: repo-" [3h])) or vector(0)'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions: [{ evaluator: { type: lt, params: [1] } }]
+
+      - uid: pg-dump-failed
+        title: "Postgres backup failed"
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning }
+        annotations:
+          summary: "A backup job (pg-dump-nightly, pgbackrest-backup@ or pgbackrest-backup-nas1@) failed on db1. Check its journal on db1."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 3600, to: 0 }
+            datasourceUid: loki
+            model:
+              refId: A
+              queryType: instant
+              expr: 'sum(count_over_time({service_name="journald"} | host_name="db1" | unit=~"pg-dump-nightly.service|pgbackrest-backup(-nas1)?@.*" |~ "Failed with result|failed" [1h])) or vector(0)'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions: [{ evaluator: { type: gt, params: [0] } }]
+
+      - uid: site-down
+        title: "Public site down"
+        condition: C
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.instance }} has failed its HTTPS check from obs1 for 5+ minutes."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prom
+            model:
+              refId: A
+              instant: true
+              expr: "1 - probe_success{job=\"blackbox\"}"
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions: [{ evaluator: { type: gt, params: [0] } }]
+
+      - uid: site-cert-expiry
+        title: "Site certificate expiring"
+        condition: C
+        for: 1h
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning }
+        annotations:
+          summary: "The TLS certificate of {{ $labels.instance }} expires in under 14 days."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prom
+            model:
+              refId: A
+              instant: true
+              expr: "(probe_ssl_earliest_cert_expiry{job=\"blackbox\"} - time()) / 86400"
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions: [{ evaluator: { type: lt, params: [14] } }]
+
+{% endraw %}

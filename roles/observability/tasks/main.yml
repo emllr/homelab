@@ -1,0 +1,105 @@
+---
+# Observability backend on obs1: OTel Collector -> Prometheus / Loki / Tempo -> Grafana,
+# in Docker Compose under {{ obs_root }} (the data disk). Secrets come from the vault
+# (group_vars/all/vault.yml, kept in the private repo); a missing one fails the run.
+
+- name: Data and config directories
+  ansible.builtin.file:
+    path: "{{ obs_root }}/{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+    mode: "{{ item.mode | default('0755') }}"
+  loop:
+    - { path: config }
+    - { path: config/grafana/provisioning/datasources }
+    - { path: config/grafana/provisioning/dashboards }
+    - { path: config/grafana/provisioning/alerting }
+    - { path: config/grafana/provisioning/plugins }
+    - { path: config/grafana/dashboards }
+    - { path: secrets, mode: '0711' }
+    - { path: secrets/otlp, owner: '10001', group: '10001', mode: '0700' }
+    - { path: prometheus, owner: '65534', group: '65534' }
+    - { path: loki, owner: '10001', group: '10001' }
+    - { path: tempo, owner: '10001', group: '10001' }
+    - { path: grafana, owner: '472', group: '0' }
+  loop_control:
+    label: "{{ item.path }}"
+
+# ---- secrets (from the vault) -----------------------------------------------
+
+- name: OTLP bearer token per origin
+  ansible.builtin.copy:
+    dest: "{{ obs_root }}/secrets/otlp/{{ item.name }}.tokens"
+    content: |
+      {{ vault_otlp_tokens[item.name] }}  # {{ item.name }}
+    owner: '10001'
+    group: '10001'
+    mode: '0400'
+  loop: "{{ obs_origins }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+  notify: restart otelcol
+
+- name: Grafana admin password
+  ansible.builtin.copy:
+    dest: "{{ obs_root }}/secrets/grafana_admin_password"
+    content: "{{ vault_grafana_admin_password }}"
+    owner: '472'
+    group: '0'
+    mode: '0400'
+  no_log: true
+
+# ---- configs ------------------------------------------------------------------
+
+- name: Service configs
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ obs_root }}/config/{{ item.dest }}"
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+    mode: "{{ item.mode | default('0644') }}"
+  loop:
+    - { src: otelcol.yaml.j2, dest: otelcol.yaml, svc: otelcol }
+    - { src: prometheus.yml.j2, dest: prometheus.yml, svc: prometheus }
+    - { src: loki.yaml.j2, dest: loki.yaml, svc: loki }
+    - { src: tempo.yaml.j2, dest: tempo.yaml, svc: tempo }
+    - { src: blackbox.yml.j2, dest: blackbox.yml, svc: blackbox }
+    - { src: grafana-datasources.yaml.j2, dest: grafana/provisioning/datasources/datasources.yaml, svc: grafana }
+    - { src: grafana-alerting.yaml.j2, dest: grafana/provisioning/alerting/homelab.yaml, svc: grafana, secret: true, owner: '472', group: '0', mode: '0640' }
+  loop_control:
+    label: "{{ item.dest }}"
+  no_log: "{{ item.secret | default(false) }}"
+  register: obs_configs
+
+- name: Grafana dashboard provider and dashboards
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ obs_root }}/config/grafana/{{ item.dest }}"
+    mode: '0644'
+  loop:
+    - { src: grafana-dashboards.yaml, dest: provisioning/dashboards/homelab.yaml }
+    - { src: dashboards/, dest: dashboards/ }
+  loop_control:
+    label: "{{ item.dest }}"
+  register: obs_dashboards
+
+- name: Compose file
+  ansible.builtin.template:
+    src: compose.yml.j2
+    dest: "{{ obs_root }}/compose.yml"
+    mode: '0644'
+
+- name: Start or update the stack
+  ansible.builtin.command: docker compose -f {{ obs_root }}/compose.yml up -d --remove-orphans
+  register: obs_up
+  changed_when: obs_up.stderr is search('Started|Recreated|Created')
+
+# Containers whose config file changed but whose container wasn't recreated above.
+- name: Restart services whose config changed
+  ansible.builtin.command: docker compose -f {{ obs_root }}/compose.yml restart {{ item }}
+  loop: "{{ (obs_configs.results | selectattr('changed') | map(attribute='item.svc') | list
+            + (['grafana'] if obs_dashboards.changed else [])) | unique }}"
+  when: not ansible_check_mode
+

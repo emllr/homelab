@@ -1,0 +1,427 @@
+{
+  "uid": "homelab-logs-hosts",
+  "title": "Logs \u00b7 Hosts (journald)",
+  "tags": [
+    "homelab",
+    "logs"
+  ],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "schemaVersion": 39,
+  "links": [
+    {
+      "type": "dashboards",
+      "tags": [
+        "homelab"
+      ],
+      "asDropdown": true,
+      "title": "Homelab",
+      "includeVars": false,
+      "keepTime": true
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "host",
+        "label": "Host",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prom"
+        },
+        "query": {
+          "query": "label_values(node_uname_info, host_name)",
+          "refId": "host"
+        },
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "unit",
+        "label": "Unit (regex)",
+        "type": "textbox",
+        "query": ".+",
+        "current": {
+          "text": ".+",
+          "value": ".+"
+        }
+      },
+      {
+        "name": "level",
+        "label": "Level",
+        "type": "custom",
+        "multi": true,
+        "includeAll": false,
+        "query": "emerg,alert,crit,error,warning,notice,info,debug",
+        "options": [
+          {
+            "text": "emerg",
+            "value": "emerg",
+            "selected": true
+          },
+          {
+            "text": "alert",
+            "value": "alert",
+            "selected": true
+          },
+          {
+            "text": "crit",
+            "value": "crit",
+            "selected": true
+          },
+          {
+            "text": "error",
+            "value": "error",
+            "selected": true
+          },
+          {
+            "text": "warning",
+            "value": "warning",
+            "selected": true
+          },
+          {
+            "text": "notice",
+            "value": "notice",
+            "selected": true
+          },
+          {
+            "text": "info",
+            "value": "info",
+            "selected": true
+          },
+          {
+            "text": "debug",
+            "value": "debug",
+            "selected": false
+          }
+        ],
+        "current": {
+          "text": [
+            "emerg",
+            "alert",
+            "crit",
+            "error",
+            "warning",
+            "notice",
+            "info"
+          ],
+          "value": [
+            "emerg",
+            "alert",
+            "crit",
+            "error",
+            "warning",
+            "notice",
+            "info"
+          ]
+        }
+      },
+      {
+        "name": "hide",
+        "label": "Hide",
+        "type": "custom",
+        "multi": false,
+        "includeAll": false,
+        "query": "qemu-guest-agent.service,(none)",
+        "options": [
+          {
+            "text": "qemu-guest-agent.service",
+            "value": "qemu-guest-agent.service",
+            "selected": true
+          },
+          {
+            "text": "(none)",
+            "value": "(none)",
+            "selected": false
+          }
+        ],
+        "current": {
+          "text": [
+            "qemu-guest-agent.service"
+          ],
+          "value": [
+            "qemu-guest-agent.service"
+          ]
+        }
+      },
+      {
+        "name": "search",
+        "label": "Search",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Lines by host",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 70,
+            "lineWidth": 0,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (host_name) (count_over_time({service_name=\"journald\"} | host_name=~\"$host\" | unit=~\"$unit\" | unit!~\"$hide\" | level=~\"$level\" |= `$search` [$__auto]))",
+          "legendFormat": "{{host_name}}",
+          "queryType": "range"
+        }
+      ],
+      "id": 1,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 7
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Warnings and errors by host",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 70,
+            "lineWidth": 0,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (host_name, level) (count_over_time({service_name=\"journald\"} | host_name=~\"$host\" | unit=~\"$unit\" | unit!~\"$hide\" | level=~\"emerg|alert|crit|error|warning\" |= `$search` [$__auto]))",
+          "legendFormat": "{{host_name}} {{level}}",
+          "queryType": "range"
+        }
+      ],
+      "id": 2,
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 7
+      }
+    },
+    {
+      "type": "table",
+      "title": "Noisiest units",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(20, sum by (host_name, unit) (count_over_time({service_name=\"journald\"} | host_name=~\"$host\" | unit=~\"$unit\" | unit!~\"$hide\" | level=~\"$level\" |= `$search` [$__range])))",
+          "instant": true,
+          "queryType": "instant",
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "host_name": 0,
+              "unit": 1,
+              "Value": 2
+            },
+            "renameByName": {
+              "host_name": "Host",
+              "unit": "Unit",
+              "Value": "Lines"
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "Lines",
+            "desc": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "id": 3,
+      "gridPos": {
+        "x": 0,
+        "y": 7,
+        "w": 12,
+        "h": 9
+      }
+    },
+    {
+      "type": "table",
+      "title": "Units with warnings/errors",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(20, sum by (host_name, unit, level) (count_over_time({service_name=\"journald\"} | host_name=~\"$host\" | unit=~\"$unit\" | unit!~\"$hide\" | level=~\"emerg|alert|crit|error|warning\" |= `$search` [$__range])))",
+          "instant": true,
+          "queryType": "instant",
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "host_name": 0,
+              "unit": 1,
+              "level": 2,
+              "Value": 3
+            },
+            "renameByName": {
+              "host_name": "Host",
+              "unit": "Unit",
+              "level": "Level",
+              "Value": "Lines"
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "Lines",
+            "desc": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "id": 4,
+      "gridPos": {
+        "x": 12,
+        "y": 7,
+        "w": 12,
+        "h": 9
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Logs",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "dedupStrategy": "none",
+        "showLabels": false,
+        "showCommonLabels": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service_name=\"journald\"} | host_name=~\"$host\" | unit=~\"$unit\" | unit!~\"$hide\" | level=~\"$level\" |= `$search` | line_format `{{ printf \"%-8s\" .host_name }} {{ or .unit \"-\" }}: {{ __line__ }}`",
+          "queryType": "range"
+        }
+      ],
+      "description": "host unit: message. Hide = qemu-guest-agent by default (commands run with `vm exec`).",
+      "id": 5,
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 24,
+        "h": 18
+      }
+    }
+  ],
+  "editable": true,
+  "graphTooltip": 1
+}

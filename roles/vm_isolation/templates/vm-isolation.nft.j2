@@ -1,0 +1,115 @@
+#!/usr/sbin/nft -f
+# {{ ansible_managed }}
+#
+# VM isolation for internet-facing guests on these networks:
+{% for net in vm_isolated_networks %}
+#   {{ net.name }}: {{ net.bridge }} ({{ net.cidr }}), egress via {{ net.wan_if }}
+{% endfor %}
+#
+# This table only ever DROPS; it never needs to accept for traffic to pass.
+# In nftables every base chain on a hook must accept a packet, so a drop here
+# is final no matter what ufw (table ip filter) or libvirt (table ip
+# libvirt_network) say. ufw still needs its own allow rules for the traffic
+# that should pass; see tasks/main.yml.
+#
+# Loaded by vm-isolation-firewall.service, NOT nftables.service (which would
+# `flush ruleset` and wipe ufw + libvirt).
+
+table inet vm_isolation
+delete table inet vm_isolation
+
+table inet vm_isolation {
+	set non_public_v4 {
+		type ipv4_addr
+		flags interval
+		elements = {
+			0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8,
+			169.254.0.0/16, 172.16.0.0/12, 192.0.0.0/24, 192.168.0.0/16,
+			198.18.0.0/15, 224.0.0.0/4, 240.0.0.0/4
+		}
+	}
+
+	# ---- traffic addressed to hv1 itself -------------------------------
+	chain input {
+		type filter hook input priority filter - 10; policy accept;
+
+		# Relays: only the designated client may connect, whatever interface
+		# it arrives on.
+{% for r in vm_relays %}
+		ip daddr {{ r.listen.split(':')[0] }} tcp dport {{ r.listen.split(':')[1] }} ip saddr != {{ '{ ' ~ (r.allow_from | join(', ')) ~ ' }' if r.allow_from is not string else r.allow_from }} drop comment "relay {{ r.name }}"
+{% endfor %}
+
+{% for net in vm_isolated_networks %}
+		iifname "{{ net.bridge }}" jump {{ net.name | replace('-', '_') }}_to_host
+{% endfor %}
+	}
+{% for net in vm_isolated_networks %}
+{% set id = net.name | replace('-', '_') %}
+
+	chain {{ id }}_to_host {
+		ct state established,related accept
+		ct state invalid drop
+		meta nfproto ipv6 drop
+
+		udp sport 68 udp dport 67 accept                          comment "DHCP"
+		ip daddr {{ net.gateway }} meta l4proto { tcp, udp } th dport 53 accept comment "DNS (dnsmasq)"
+		ip daddr {{ net.gateway }} icmp type echo-request limit rate 5/second accept
+{% for hs in net.host_services %}
+		ip saddr {{ hs.from }} ip daddr {{ net.gateway }} {{ hs.proto }} dport {{ hs.port }} accept comment "host service"
+{% endfor %}
+{% for r in vm_relays if r.listen_if == net.bridge %}
+		ip saddr {{ '{ ' ~ (r.allow_from | join(', ')) ~ ' }' if r.allow_from is not string else r.allow_from }} ip daddr {{ r.listen.split(':')[0] }} tcp dport {{ r.listen.split(':')[1] }} accept comment "relay {{ r.name }}"
+{% endfor %}
+
+		limit rate 10/minute burst 20 packets log prefix "vmiso {{ net.name }}->host DROP: " level info
+		drop
+	}
+{% endfor %}
+
+	# ---- traffic routed through hv1 ------------------------------------
+	chain forward {
+		type filter hook forward priority filter - 10; policy accept;
+{% for net in vm_isolated_networks %}
+		iifname "{{ net.bridge }}" jump {{ net.name | replace('-', '_') }}_out
+		oifname "{{ net.bridge }}" jump into_isolated
+{% endfor %}
+	}
+{% for net in vm_isolated_networks %}
+{% set id = net.name | replace('-', '_') %}
+
+	chain {{ id }}_out {
+		ct state established,related accept
+		ct state invalid drop
+		meta nfproto ipv6 drop
+
+		oifname != "{{ net.wan_if }}" drop
+{% for e in net.lan_allow | default([]) %}
+		ip daddr {{ e.daddr }} {{ e.proto }} dport {{ e.dport }} accept comment "LAN {{ e.name }}"
+{% endfor %}
+		ip daddr @non_public_v4 limit rate 10/minute burst 20 packets log prefix "vmiso {{ net.name }}->private DROP: " level info
+		ip daddr @non_public_v4 drop
+
+{% for e in net.egress_extra %}
+		ip daddr {{ e.daddr }} {{ e.proto }} dport {{ e.dport }} accept
+{% endfor %}
+{% if net.egress_tcp %}
+		tcp dport { {{ net.egress_tcp | join(', ') }} } accept
+{% endif %}
+{% if net.egress_udp %}
+		udp dport { {{ net.egress_udp | join(', ') }} } accept
+{% endif %}
+		icmp type echo-request accept
+
+		limit rate 10/minute burst 20 packets log prefix "vmiso {{ net.name }}->inet DROP: " level info
+		drop
+	}
+{% endfor %}
+
+	chain into_isolated {
+		# Nothing may open a connection into an isolated network by routing.
+		# hv1 itself can still reach guests (OUTPUT hook, not FORWARD): that's
+		# how the relays and `ssh -J hv1` work.
+		ct state established,related accept
+		drop
+	}
+}

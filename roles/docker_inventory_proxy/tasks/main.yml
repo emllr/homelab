@@ -1,0 +1,60 @@
+---
+- name: Required settings
+  ansible.builtin.assert:
+    that: [dip_listen_ip | length > 0, dip_allow_from | length > 0]
+
+- name: Directory
+  ansible.builtin.file: { path: "{{ dip_root }}", state: directory, mode: '0755' }
+
+- name: nginx allowlist and compose file
+  ansible.builtin.template: { src: "{{ item }}.j2", dest: "{{ dip_root }}/{{ item }}", mode: '0644' }
+  loop: [nginx.conf, compose.yml]
+  notify: restart docker inventory proxy
+
+- name: nftables
+  ansible.builtin.apt: { name: nftables, state: present }
+
+- name: Port guard (only {{ dip_allow_from }} may reach {{ dip_port }})
+  ansible.builtin.copy:
+    dest: "{{ dip_root }}/guard.nft"
+    mode: '0644'
+    content: |
+      # Managed by homelab (docker_inventory_proxy role). Own table; leaves Docker's alone.
+      table inet docker_inventory_guard {}
+      delete table inet docker_inventory_guard
+      table inet docker_inventory_guard {
+        chain input {
+          type filter hook input priority filter; policy accept;
+          tcp dport {{ dip_port }} ip saddr {{ dip_allow_from }} accept
+          tcp dport {{ dip_port }} drop
+        }
+      }
+  notify: reload docker inventory guard
+
+- name: Guard unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/docker-inventory-guard.service
+    mode: '0644'
+    content: |
+      # Managed by homelab (docker_inventory_proxy role)
+      [Unit]
+      Description=Restrict the Docker inventory proxy port to hv1
+      Before=docker.service
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/sbin/nft -f {{ dip_root }}/guard.nft
+      ExecReload=/usr/sbin/nft -f {{ dip_root }}/guard.nft
+      ExecStop=/usr/sbin/nft delete table inet docker_inventory_guard
+      [Install]
+      WantedBy=multi-user.target
+  notify: reload docker inventory guard
+
+- name: Guard active before the proxy listens
+  ansible.builtin.systemd: { name: docker-inventory-guard, enabled: true, state: started, daemon_reload: true }
+
+- name: Proxy up
+  ansible.builtin.command: docker compose -f {{ dip_root }}/compose.yml up -d
+  args: { chdir: "{{ dip_root }}" }
+  register: dip_up
+  changed_when: "'Started' in dip_up.stderr or 'Created' in dip_up.stderr or 'Recreated' in dip_up.stderr"

@@ -1,0 +1,30 @@
+# {{ ansible_managed }}
+# Docker API allowlist for Homarr's read-only inventory. Default: 403.
+user root root;          # needs the socket anyway; the container has no other capabilities
+worker_processes 1;
+pid /tmp/nginx.pid;
+error_log /dev/stderr warn;
+events { worker_connections 64; }
+http {
+	log_format dip '$remote_addr "$request" $status $body_bytes_sent';
+	access_log /dev/stdout dip;
+	client_body_temp_path /tmp/body; proxy_temp_path /tmp/proxy;
+	fastcgi_temp_path /tmp/fcgi; uwsgi_temp_path /tmp/uwsgi; scgi_temp_path /tmp/scgi;
+	server_tokens off;
+	upstream docker { server unix:/var/run/docker.sock; }
+
+	server {
+		listen {{ dip_listen_ip }}:{{ dip_port }};
+		allow {{ dip_allow_from }};
+		deny all;
+		client_max_body_size 0;
+		if ($request_method !~ ^(GET|HEAD)$) { return 403; }
+
+		location ~ ^(/v[0-9.]+)?/(_ping|version)$          { proxy_pass http://docker; }
+		location ~ ^(/v[0-9.]+)?/containers/json$          { proxy_pass http://docker; }
+		location ~ ^(/v[0-9.]+)?/containers/[A-Za-z0-9_.-]+/stats$ {
+			proxy_pass http://docker; proxy_buffering off; proxy_read_timeout 60s;
+		}
+		location / { return 403; }
+	}
+}

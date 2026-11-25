@@ -1,0 +1,7 @@
+[Unit]
+Description=Hourly disk and ZFS health check
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1h
+[Install]
+WantedBy=timers.target

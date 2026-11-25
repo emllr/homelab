@@ -1,0 +1,91 @@
+---
+# Add the scoped rules first, then delete the legacy ones, so there's no window
+# where LAN access is closed.
+
+- name: Allow host services from the LAN NIC only
+  community.general.ufw:
+    rule: allow
+    direction: in
+    interface: "{{ host_fw_lan_if }}"
+    from_ip: "{{ host_fw_lan_cidr }}"
+    port: "{{ item.port }}"
+    proto: "{{ item.proto }}"
+    comment: "{{ item.comment }}"
+  loop: "{{ host_fw_lan_services }}"
+  loop_control:
+    label: "{{ item.comment }}"
+
+- name: Remove retired LAN service rules
+  community.general.ufw:
+    rule: allow
+    direction: in
+    interface: "{{ host_fw_lan_if }}"
+    from_ip: "{{ host_fw_lan_cidr }}"
+    port: "{{ item.port }}"
+    proto: "{{ item.proto }}"
+    delete: true
+  loop: "{{ host_fw_lan_retired | default([]) }}"
+  loop_control:
+    label: "{{ item.comment }}"
+
+# The switch does IGMP snooping: it forwards multicast (WS-Discovery on
+# 239.255.255.250, SSDP, mDNS) only to ports that answer its membership queries.
+# The queries come from 0.0.0.0, so this can't be source-scoped. Without it,
+# hv1 silently drops out of Windows' Network view.
+- name: Allow IGMP on the LAN NIC
+  community.general.ufw:
+    rule: allow
+    direction: in
+    interface: "{{ host_fw_lan_if }}"
+    proto: igmp
+    comment: 'IGMP membership queries (LAN)'
+
+- name: Allow specific guests to specific host services
+  community.general.ufw:
+    rule: allow
+    direction: in
+    interface: "{{ item.interface }}"
+    from_ip: "{{ item.from }}"
+    to_ip: "{{ item.to }}"
+    port: "{{ item.port }}"
+    proto: "{{ item.proto }}"
+    comment: "{{ item.comment }}"
+  loop: "{{ host_fw_guest_services }}"
+  loop_control:
+    label: "{{ item.comment }}"
+
+- name: Delete legacy "Anywhere" rules (IPv4 and IPv6)
+  community.general.ufw:
+    rule: allow
+    name: "{{ item.name | default(omit) }}"
+    port: "{{ item.port | default(omit) }}"
+    proto: "{{ item.proto | default(omit) }}"
+    delete: true
+  loop: "{{ host_fw_legacy_rules }}"
+  loop_control:
+    label: "{{ item.name | default(item.port ~ '/' ~ (item.proto | default('any'))) }}"
+
+- name: Install sshd hardening drop-in
+  ansible.builtin.copy:
+    src: 10-hardening.conf
+    dest: /etc/ssh/sshd_config.d/10-hardening.conf
+    owner: root
+    group: root
+    mode: '0644'
+  register: sshd_dropin
+  notify: reload sshd
+
+# Runs before the handler; if it fails the play stops and sshd is not reloaded.
+- name: Validate sshd config
+  ansible.builtin.command: sshd -t
+  changed_when: false
+  when: sshd_dropin.changed  # noqa: no-handler
+
+# wsdd announces hv1 on every interface by default, including VM bridges and
+# macvtap links, so guests learn about the host. Keep it on the LAN NIC.
+- name: Restrict wsdd to the LAN NIC
+  ansible.builtin.lineinfile:
+    path: /etc/conf.d/wsdd
+    regexp: '^WSDD_PARAMS='
+    line: 'WSDD_PARAMS="--workgroup WORKGROUP -i {{ host_fw_lan_if }}"'
+  notify: restart wsdd

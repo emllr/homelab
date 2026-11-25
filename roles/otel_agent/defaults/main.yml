@@ -1,0 +1,14 @@
+---
+# Grafana Alloy as a host agent: host metrics + systemd journal -> obs1's OTel Collector.
+alloy_version: v1.21.3
+alloy_url: "https://github.com/grafana/alloy/releases/download/{{ alloy_version }}/alloy-linux-amd64.zip"
+alloy_sha256sums_url: "https://github.com/grafana/alloy/releases/download/{{ alloy_version }}/SHA256SUMS"
+
+# Where this host sends OTLP/HTTP, and which origin token it uses (see roles/observability).
+otel_agent_endpoint: http://10.50.180.10:4318
+otel_agent_origin: hv1
+otel_agent_host_name: "{{ inventory_hostname }}"
+
+# Optional hard memory cap for small hosts (e.g. edge1: MemoryMax=200M, GOMEMLIMIT=150MiB).
+alloy_memory_max: ""
+alloy_gomemlimit: ""

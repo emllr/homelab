@@ -1,0 +1,6 @@
+---
+# Weekly Docker clean-up (dev1 filled its 591 GB disk with build cache and orphaned anonymous volumes,
+# 2026-11-23). Never touches named volumes, running containers, or images in use.
+docker_prune_on_calendar: "Sun *-*-* 04:30"
+docker_prune_keep_build_cache: 30GB
+docker_prune_volumes: true          # anonymous unused volumes only (Docker >= 23; older versions are skipped)

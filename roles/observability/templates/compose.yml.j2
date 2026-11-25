@@ -1,0 +1,102 @@
+# {{ ansible_managed }}
+# Observability backend on obs1. Only the collector (OTLP 4318-4323) and Grafana (3000) are
+# published; obs1 itself is reachable only from hv1 (isolated `obs` network + relays).
+name: obs
+
+services:
+  otelcol:
+    image: {{ obs_images.otelcol }}
+    command: ["--config=/etc/otelcol/config.yaml"]
+    restart: unless-stopped
+    volumes:
+      - {{ obs_root }}/config/otelcol.yaml:/etc/otelcol/config.yaml:ro
+      - {{ obs_root }}/secrets/otlp:/etc/otelcol/secrets:ro
+    ports:
+{% for o in obs_origins %}
+      - "{{ o.port }}:{{ o.port }}"
+{% endfor %}
+    depends_on: [prometheus, loki, tempo]
+
+  prometheus:
+    image: {{ obs_images.prometheus }}
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time={{ obs_retention.metrics }}
+      - --web.enable-otlp-receiver
+      - --web.enable-remote-write-receiver
+{% if obs_prometheus_admin_api %}
+      - --web.enable-admin-api
+{% endif %}
+    volumes:
+      - {{ obs_root }}/config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - {{ obs_root }}/prometheus:/prometheus
+
+  loki:
+    image: {{ obs_images.loki }}
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/config.yaml", "-target=all"]
+    volumes:
+      - {{ obs_root }}/config/loki.yaml:/etc/loki/config.yaml:ro
+      - {{ obs_root }}/loki:/loki
+
+  tempo:
+    image: {{ obs_images.tempo }}
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo/config.yaml", "-target=all"]
+    volumes:
+      - {{ obs_root }}/config/tempo.yaml:/etc/tempo/config.yaml:ro
+      - {{ obs_root }}/tempo:/var/tempo
+
+  grafana:
+    image: {{ obs_images.grafana }}
+    restart: unless-stopped
+    environment:
+      GF_SERVER_ROOT_URL: "{{ obs_grafana_root_url }}"
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/live.json
+{% if obs_grafana_embed_origins %}
+      # Panels embedded in Homarr (iframe). The CSP only says who may frame Grafana.
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+      GF_SECURITY_CONTENT_SECURITY_POLICY: "true"
+      GF_SECURITY_CONTENT_SECURITY_POLICY_TEMPLATE: "frame-ancestors 'self' {{ obs_grafana_embed_origins | join(' ') }};"
+{% endif %}
+{% if obs_grafana_tls %}
+      GF_SERVER_PROTOCOL: https
+      GF_SERVER_DOMAIN: "{{ obs_grafana_hostname }}"
+      GF_SERVER_CERT_FILE: /etc/grafana/tls/fullchain.pem
+      GF_SERVER_CERT_KEY: /etc/grafana/tls/privkey.pem
+{% endif %}
+    volumes:
+      - {{ obs_root }}/grafana:/var/lib/grafana
+      - {{ obs_root }}/config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - {{ obs_root }}/config/grafana/dashboards:/etc/grafana/dashboards:ro
+      - {{ obs_root }}/secrets/grafana_admin_password:/run/secrets/grafana_admin_password:ro
+{% if obs_grafana_tls %}
+      - {{ obs_root }}/secrets/tls:/etc/grafana/tls:ro
+{% endif %}
+    ports:
+      - "3000:3000"
+    depends_on: [prometheus, loki, tempo]
+
+  blackbox:
+    image: {{ obs_images.blackbox }}
+    restart: unless-stopped
+    command: ["--config.file=/etc/blackbox/blackbox.yml"]
+    volumes:
+      - {{ obs_root }}/config/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+
+  node-exporter:
+    image: {{ obs_images.node_exporter }}
+    restart: unless-stopped
+    pid: host
+    command: ["--path.rootfs=/host"]
+    volumes:
+      - /:/host:ro,rslave

@@ -1,0 +1,432 @@
+{
+  "uid": "homelab-live",
+  "title": "Homelab \u00b7 Live",
+  "tags": [
+    "homelab",
+    "live"
+  ],
+  "timezone": "browser",
+  "refresh": "5s",
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "schemaVersion": 39,
+  "templating": {
+    "list": [
+      {
+        "name": "host",
+        "label": "Host",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prom"
+        },
+        "query": {
+          "query": "label_values(node_uname_info, host_name)",
+          "refId": "host"
+        },
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "CPU busy %",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 8,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{host_name}}",
+          "expr": "100 * (1 - avg by (host_name) (rate(node_cpu_seconds_total{mode=\"idle\", host_name=~\"$host\"}[1m])))"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Memory used %",
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 8,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{host_name}}",
+          "expr": "100 * (1 - node_memory_MemAvailable_bytes{host_name=~\"$host\"} / node_memory_MemTotal_bytes{host_name=~\"$host\"})"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Network (non-loopback)",
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 8,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bps"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{host_name}} rx",
+          "expr": "8 * sum by (host_name) (rate(node_network_receive_bytes_total{host_name=~\"$host\", device!~\"lo|veth.*|docker.*|br-.*|vnet.*\"}[1m]))"
+        },
+        {
+          "refId": "B",
+          "legendFormat": "{{host_name}} tx",
+          "expr": "-8 * sum by (host_name) (rate(node_network_transmit_bytes_total{host_name=~\"$host\", device!~\"lo|veth.*|docker.*|br-.*|vnet.*\"}[1m]))"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Telemetry accepted (per s)",
+      "gridPos": {
+        "x": 0,
+        "y": 7,
+        "w": 8,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "metric points",
+          "expr": "sum(rate(otelcol_receiver_accepted_metric_points[1m]))"
+        },
+        {
+          "refId": "B",
+          "legendFormat": "log records",
+          "expr": "sum(rate(otelcol_receiver_accepted_log_records[1m]))"
+        },
+        {
+          "refId": "C",
+          "legendFormat": "spans",
+          "expr": "sum(rate(otelcol_receiver_accepted_spans[1m]))"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Telemetry refused (per s)",
+      "gridPos": {
+        "x": 8,
+        "y": 7,
+        "w": 8,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "metric points",
+          "expr": "sum(rate(otelcol_receiver_refused_metric_points[1m])) or vector(0)"
+        },
+        {
+          "refId": "B",
+          "legendFormat": "log records",
+          "expr": "sum(rate(otelcol_receiver_refused_log_records[1m])) or vector(0)"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Load (1m)",
+      "gridPos": {
+        "x": 16,
+        "y": 7,
+        "w": 8,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{host_name}}",
+          "expr": "node_load1{host_name=~\"$host\"}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "logs",
+      "title": "Warnings and errors (apps + hosts)",
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 24,
+        "h": 14
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "showLabels": false,
+        "showCommonLabels": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "range",
+          "expr": "{service_name=~\"exampleapp-(app|web|worker|ws|scheduler).*\"} | detected_level=~\"error|fatal|warn\" | json msg=\"msg\", module=\"module\", traceId=\"traceId\" | line_format `{{ .service_name | trimPrefix \"exampleapp-\" }}  {{ with .module }}[{{ . }}]  {{ end }}{{ or .msg __line__ }}{{ if .traceId }}   trace={{ .traceId }}{{ end }}`"
+        },
+        {
+          "refId": "B",
+          "queryType": "range",
+          "expr": "{service_name=\"journald\"} | level=~\"emerg|alert|crit|error|warning\" | unit!=\"qemu-guest-agent.service\" | line_format `{{ printf \"%-8s\" .host_name }} {{ or .unit \"-\" }}: {{ __line__ }}`"
+        }
+      ],
+      "description": "exampleapp error/warn lines and journald warning-or-worse (guest-agent hidden). Full views: Logs \u00b7 Apps / Hosts / Containers."
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Suricata alerts by signature (5m)",
+      "gridPos": {
+        "x": 0,
+        "y": 26,
+        "w": 12,
+        "h": 9
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{alert_signature}}",
+          "expr": "sum by (alert_signature) (count_over_time({service_name=\"suricata\"} | json | event_type=\"alert\" [5m]))"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "logs",
+      "title": "Suricata alerts (newest first)",
+      "gridPos": {
+        "x": 12,
+        "y": 26,
+        "w": 12,
+        "h": 9
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": false,
+        "sortOrder": "Descending",
+        "enableLogDetails": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service_name=\"suricata\"} | json | event_type=\"alert\" | line_format \"sev {{.alert_severity}} | {{.alert_signature}} | {{.src_ip}} -> {{.dest_ip}}:{{.dest_port}} | {{.in_iface}}\""
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "CrowdSec detections by scenario (5m)",
+      "gridPos": {
+        "x": 0,
+        "y": 35,
+        "w": 12,
+        "h": 9
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{host_name}} {{scenario}}",
+          "expr": "sum by (host_name, scenario) (count_over_time({service_name=\"journald\"} | unit=\"crowdsec.service\" |= \"performed\" | regexp `Ip (?P<src_ip>\\S+) performed '(?P<scenario>[^']+)'` [5m]))"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "logs",
+      "title": "CrowdSec detections and bans (newest first)",
+      "gridPos": {
+        "x": 12,
+        "y": 35,
+        "w": 12,
+        "h": 9
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": false,
+        "sortOrder": "Descending",
+        "enableLogDetails": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service_name=\"journald\"} | unit=\"crowdsec.service\" |~ \"performed '|ban on Ip\" | logfmt | line_format \"{{.host_name}} | {{.msg}}\""
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "CrowdSec active decisions (local = bans from our own detections; lists/CAPI = community blocklist, edge1 only)",
+      "gridPos": {
+        "x": 0,
+        "y": 44,
+        "w": 24,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "value_and_name"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "instant": true,
+          "legendFormat": "{{host_name}} {{origin}}",
+          "expr": "sum by (host_name, origin) (cs_active_decisions)"
+        }
+      ]
+    }
+  ],
+  "links": [
+    {
+      "type": "dashboards",
+      "tags": [
+        "homelab"
+      ],
+      "asDropdown": true,
+      "title": "Homelab",
+      "includeVars": false,
+      "keepTime": true
+    }
+  ]
+}

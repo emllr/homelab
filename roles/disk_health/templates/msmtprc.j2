@@ -1,0 +1,14 @@
+# Gmail app password lives in /etc/msmtp.pass (root only)
+defaults
+auth on
+tls on
+tls_starttls off
+tls_trust_file system
+syslog LOG_MAIL
+aliases /etc/aliases.msmtp
+account default
+host smtp.gmail.com
+port 465
+from {{ disk_health_mail }}
+user {{ disk_health_mail }}
+passwordeval "cat /etc/msmtp.pass"

@@ -1,0 +1,22 @@
+---
+- name: Hypervisor services
+  hosts: hypervisor
+  roles: [host_firewall, disk_health, vm_isolation, vm_tools, crowdsec_cf_sync]
+
+- name: Observability backend
+  hosts: observability
+  gather_facts: false
+  roles: [observability]
+
+- name: Postgres
+  hosts: database
+  roles: [postgres_server]
+
+- name: Web hosts
+  hosts: web
+  roles: [crowdsec, docker_inventory_proxy, docker_prune]
+
+- name: Telemetry agents
+  hosts: hypervisor:database:web
+  gather_facts: false
+  roles: [otel_agent]

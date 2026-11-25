@@ -1,0 +1,27 @@
+---
+# Disk and ZFS health mail for hv1.
+disk_health_mail: admin@example.com      # sends as, and to, this Gmail account
+# Gmail app password: vault_gmail_app_password.
+
+disk_health_pool: pool0
+disk_health_space_warn: 80          # percent used
+disk_health_space_crit: 90
+disk_health_temp_hdd: 50            # degrees C
+disk_health_temp_nvme: 75
+disk_health_scrub_max_days: 75
+# Every 2 months (even months, so the first is December): about 10 TB read per drive per scrub, on a lightly used pool.
+disk_health_scrub_on_calendar: "*-02/2-01 00:00"
+disk_health_report_on_calendar: "*-*-05 08:00"
+
+# Short self-test Sundays 02:00. Long (43 h, reads the whole drive) once a year: the 10th of long_month, 06:00,
+# in months without a scrub.
+# Update the serial when a drive is replaced.
+disk_health_hdd_prefix: ata-MODEL_
+disk_health_hdds:
+  - { serial: SERIAL, long_month: "01" }
+  - { serial: SERIAL, long_month: "03" }
+  - { serial: SERIAL, long_month: "05" }
+  - { serial: SERIAL, long_month: "07" }
+  - { serial: SERIAL, long_month: "09" }
+# Watched only: no self-tests and no btrfs scrub, since this drive hung under sustained reads.
+disk_health_nvme: nvme-MODEL_SERIAL

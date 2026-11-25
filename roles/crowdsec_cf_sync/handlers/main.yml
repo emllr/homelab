@@ -1,0 +1,3 @@
+---
+- name: run crowdsec-cf-sync
+  ansible.builtin.systemd: { name: crowdsec-cf-sync.service, state: started, daemon_reload: true }

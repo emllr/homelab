@@ -1,0 +1,19 @@
+name: checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - run: docker run --rm -v "$PWD:/repo:ro" zricethezav/gitleaks:v8.24.3 git /repo --redact --verbose
+  ansible:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: pipx install ansible-core
+      - run: ansible-galaxy collection install -r requirements.yml
+      - run: ansible-playbook -i inventory.example.yml services.yml --syntax-check
+      - run: ansible-playbook site.yml --syntax-check

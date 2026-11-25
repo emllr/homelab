@@ -1,0 +1,58 @@
+---
+# Isolated networks for internet-facing VMs, plus the TCP relays that are the only permitted paths between
+# them and trusted hosts. Example values: replace with your own. See docs/vm-isolation.md.
+
+# Each network is a libvirt NAT network with isolated bridge ports. Guests reach DHCP/DNS on their gateway,
+# `host_services` on the gateway, and public addresses on the egress allowlist. They can't reach the
+# hypervisor, the LAN, other isolated networks, or each other.
+#
+#   wan_if:         NAT egress interface
+#   route_table:    optional policy-routing table for this bridge (e.g. a VPN)
+#   egress_tcp/udp: ports allowed to any public address ("a-b" ranges ok)
+#   egress_extra:   [{daddr, proto, dport}] specific public endpoints
+#   lan_allow:      [{name, daddr, proto, dport}] specific PRIVATE endpoints
+#   host_services:  [{from, proto, port}] extra ports on the gateway
+#   dns_forwarders: upstream DNS (not the LAN router, so guests can't enumerate local names)
+vm_isolated_networks:
+  - name: dmz
+    bridge: virbr-dmz
+    gateway: 10.50.150.1
+    cidr: 10.50.150.0/24
+    netmask: 255.255.255.0
+    dhcp_range: [10.50.150.100, 10.50.150.199]
+    wan_if: eth0
+    dns_forwarders: [1.1.1.1, 9.9.9.9]
+    guests:
+      - { name: web1, mac: '52:54:00:00:00:01', ip: 10.50.150.11 }
+    dns_hosts: []
+    egress_tcp: [80, 443]
+    egress_udp: [123]
+    egress_extra: []
+    host_services: []
+  - name: data
+    bridge: virbr-data
+    gateway: 10.50.200.1
+    cidr: 10.50.200.0/24
+    netmask: 255.255.255.0
+    dhcp_range: [10.50.200.100, 10.50.200.199]
+    wan_if: eth0
+    dns_forwarders: [1.1.1.1, 9.9.9.9]
+    guests:
+      - { name: db1, mac: '52:54:00:00:00:02', ip: 10.50.200.10 }
+    dns_hosts: []
+    egress_tcp: [80, 443]
+    egress_udp: [123]
+    egress_extra: []
+    host_services: []
+
+# TCP relays on the hypervisor (systemd-socket-proxyd): the only way across a boundary.
+#   allow_from: address or CIDR (or a list) that may connect, enforced by nft and ufw
+#   listen_if:  interface the client arrives on
+#   max_conns:  size for the client's connection pools
+vm_relays:
+  - name: app-postgres
+    listen: 10.50.150.1:5432
+    listen_if: virbr-dmz
+    allow_from: 10.50.150.11
+    target: 10.50.200.10:5432
+    max_conns: 256

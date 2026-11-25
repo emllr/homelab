@@ -1,0 +1,4 @@
+---
+# VMs: a login prompt on the serial port for `vm console` (reachable only through libvirt on hv1).
+- name: Serial console login (ttyS0)
+  ansible.builtin.systemd: { name: serial-getty@ttyS0.service, enabled: true, state: started }

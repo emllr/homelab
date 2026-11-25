@@ -1,0 +1,227 @@
+// {{ ansible_managed }}
+// Host agent: node metrics + systemd journal -> OTLP/HTTP -> obs1's collector
+// (origin "{{ otel_agent_origin }}"; the collector stamps telemetry.origin from the port).
+
+prometheus.exporter.unix "host" { }
+
+prometheus.scrape "host" {
+  targets         = prometheus.exporter.unix.host.targets
+  forward_to      = [otelcol.receiver.prometheus.default.receiver]
+  scrape_interval = "15s"
+}
+
+{% if otel_agent_crowdsec | default(false) %}
+// CrowdSec's own metrics (local only on 127.0.0.1:6060): parsed lines, bucket overflows, decisions.
+prometheus.scrape "crowdsec" {
+  targets         = [{ __address__ = "127.0.0.1:6060" }]
+  job_name        = "crowdsec"
+  forward_to      = [otelcol.receiver.prometheus.default.receiver]
+  scrape_interval = "30s"
+}
+
+{% endif %}
+{% if otel_agent_postgres is defined %}
+// Postgres server metrics (Alloy's embedded postgres_exporter). Connects over the local
+// socket as role "alloy" (pg_monitor, peer auth, no password); created by this role.
+prometheus.exporter.postgres "pg" {
+  data_source_names = ["postgresql://alloy@/{{ otel_agent_postgres.database }}?host={{ otel_agent_postgres.socket_dir | default('/var/run/postgresql') }}&sslmode=disable"]
+  enabled_collectors = [
+    "database", "database_wraparound", "locks", "long_running_transactions", "postmaster",
+    "process_idle", "replication", "replication_slot", "stat_activity_autovacuum",
+    "stat_bgwriter", "stat_checkpointer", "stat_database", "stat_progress_vacuum",
+    "stat_statements", "stat_user_tables", "statio_user_tables", "wal",
+  ]
+  // Top statements by total time, with (truncated) SQL text as a label for the dashboard.
+  stat_statements {
+    include_query = true
+    query_length  = 150
+    limit         = 50
+  }
+}
+
+prometheus.scrape "postgres" {
+  targets         = prometheus.exporter.postgres.pg.targets
+  job_name        = "postgres"
+  forward_to      = [otelcol.receiver.prometheus.default.receiver]
+  scrape_interval = "30s"
+}
+
+{% endif %}
+otelcol.receiver.prometheus "default" {
+  output {
+    metrics = [otelcol.processor.transform.host.input]
+  }
+}
+
+loki.relabel "journal" {
+  forward_to = []
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "level"
+  }
+}
+
+loki.source.journal "journal" {
+  forward_to    = [loki.process.journal.receiver]
+  relabel_rules = loki.relabel.journal.rules
+  max_age       = "12h"
+  labels        = { job = "journal" }
+}
+
+// Noise trimming. The QEMU guest agent logs every poll from hv1's `vm exec` / Ansible
+// (~75k "guest-exec-status" lines a day); keep "guest-exec called" (an audit trail of commands run
+// in the VM) and drop the polling.
+loki.process "journal" {
+  stage.match {
+    selector = `{unit="qemu-guest-agent.service"} |~ "guest-(exec-status|file-(read|write|close|seek|flush)|ping|sync|info|get-)"`
+    action   = "drop"
+  }
+  forward_to = [otelcol.receiver.loki.default.receiver]
+}
+
+otelcol.receiver.loki "default" {
+  output {
+    logs = [otelcol.processor.transform.host.input]
+  }
+}
+
+otelcol.processor.transform "host" {
+  error_mode = "ignore"
+  metric_statements {
+    context    = "resource"
+    statements = [`set(attributes["host.name"], "{{ otel_agent_host_name }}")`]
+  }
+  log_statements {
+    context    = "resource"
+    statements = [
+      `set(attributes["host.name"], "{{ otel_agent_host_name }}")`,
+      `set(attributes["service.name"], "journald")`,
+    ]
+  }
+  output {
+    metrics = [otelcol.processor.batch.default.input]
+    logs    = [otelcol.processor.batch.default.input]
+  }
+}
+
+{% if otel_agent_suricata_eve | default('') %}
+// Suricata EVE: ship only alerts and anomalies (flows/dns/tls stay local, rotated after 3 days).
+loki.source.file "suricata" {
+  targets       = [{ __path__ = "{{ otel_agent_suricata_eve }}", job = "suricata" }]
+  forward_to    = [loki.process.suricata.receiver]
+  tail_from_end = true
+}
+
+loki.process "suricata" {
+  stage.match {
+    // Alloy raw string (no escaping); the LogQL inside uses an ordinary double-quoted string.
+    selector = `{job="suricata"} !~ "\"event_type\":\"(alert|anomaly)\""`
+    action   = "drop"
+  }
+  forward_to = [otelcol.receiver.loki.suricata.receiver]
+}
+
+otelcol.receiver.loki "suricata" {
+  output {
+    logs = [otelcol.processor.transform.suricata.input]
+  }
+}
+
+otelcol.processor.transform "suricata" {
+  error_mode = "ignore"
+  log_statements {
+    context    = "resource"
+    statements = [
+      `set(attributes["host.name"], "{{ otel_agent_host_name }}")`,
+      `set(attributes["service.name"], "suricata")`,
+    ]
+  }
+  output {
+    logs = [otelcol.processor.batch.default.input]
+  }
+}
+
+{% endif %}
+{% if otel_agent_docker_logs | default(false) %}
+// Docker container logs via /var/log/docker-containers/<name>.log (symlinks kept by
+// docker-log-links.timer). service.name = container name.
+local.file_match "docker" {
+  path_targets = [{ __path__ = "/var/log/docker-containers/*.log" }]
+  sync_period  = "15s"
+}
+
+discovery.relabel "docker" {
+  targets = local.file_match.docker.targets
+  rule {
+    source_labels = ["__path__"]
+    regex         = ".*/([^/]+)\\.log"
+    target_label  = "container"
+  }
+}
+
+loki.source.file "docker" {
+  targets       = discovery.relabel.docker.output
+  forward_to    = [loki.process.docker.receiver]
+  tail_from_end = true
+}
+
+loki.process "docker" {
+  stage.docker { }
+  // wireproxy: keepalive/handshake DEBUG chatter only
+  stage.match {
+    selector = `{container=~"exampleapp-wireproxy-.*"} |~ "^DEBUG: "`
+    action   = "drop"
+  }
+  // blitzbrowser (NestJS) colours its output
+  stage.match {
+    selector = `{container=~"blitzbrowser-.*"}`
+    stage.decolorize { }
+  }
+  forward_to = [otelcol.receiver.loki.docker.receiver]
+}
+
+otelcol.receiver.loki "docker" {
+  output {
+    logs = [otelcol.processor.transform.docker.input]
+  }
+}
+
+otelcol.processor.transform "docker" {
+  error_mode = "ignore"
+  log_statements {
+    context    = "log"
+    statements = [
+      `set(resource.attributes["host.name"], "{{ otel_agent_host_name }}")`,
+      `set(resource.attributes["service.name"], attributes["container"]) where attributes["container"] != nil`,
+    ]
+  }
+  output {
+    logs = [otelcol.processor.batch.default.input]
+  }
+}
+
+{% endif %}
+otelcol.processor.batch "default" {
+  output {
+    metrics = [otelcol.exporter.otlphttp.obs1.input]
+    logs    = [otelcol.exporter.otlphttp.obs1.input]
+  }
+}
+
+otelcol.auth.bearer "obs1" {
+  token = "{{ vault_otlp_tokens[otel_agent_origin] }}"
+}
+
+otelcol.exporter.otlphttp "obs1" {
+  client {
+    endpoint = "{{ otel_agent_endpoint }}"
+    auth     = otelcol.auth.bearer.obs1.handler
+    tls {
+      insecure = true
+    }
+  }
+}

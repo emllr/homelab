@@ -13,7 +13,6 @@
     - pkgbuild
     - zfs
     - samba
-    - podman
     - libvirt
     - cockpit
     - letsencrypt

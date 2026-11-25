@@ -1,0 +1,16 @@
+#compdef vm
+# Managed by homelab (role vm_tools)
+local -a vms
+vms=(${(f)"$(virsh -q -c qemu:///system list --all --name 2>/dev/null)"})
+_arguments -C \
+  '1:action:(list exec shell console push pull)' \
+  '*::arg:->args'
+case $state in
+  args)
+    case $words[1] in
+      exec|shell) _arguments '-n[ignore stdin]' '-u[run as user]:user:' '-t[timeout seconds]:secs:' "1:vm:(${vms})" '*::command:_normal' ;;
+      console) _arguments "1:vm:(${vms})" ;;
+      push) _arguments "1:vm:(${vms})" '2:local file:_files' '3:remote path:' ;;
+      pull) _arguments "1:vm:(${vms})" '2:remote path:' '3:local file:_files' ;;
+    esac ;;
+esac

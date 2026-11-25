@@ -1,0 +1,46 @@
+---
+# Host services on hv1 are reachable only from the LAN, and only when the
+# traffic actually arrives on the LAN NIC. Packets from VM bridges (virbr*) or
+# the WARP tunnel (wg1) never match these rules, even with a spoofed source.
+# Guest DHCP/DNS, forwarding and dmz/relay rules live in the libvirt and
+# vm_isolation roles.
+host_fw_lan_if: eth0
+host_fw_lan_cidr: 10.50.1.0/24
+
+host_fw_lan_services:
+  - { port: '22',      proto: tcp, comment: 'SSH (LAN)' }
+  - { port: '137,138', proto: udp, comment: 'Samba NetBIOS (LAN)' }
+  - { port: '139,445', proto: tcp, comment: 'Samba SMB (LAN)' }
+  - { port: '3702',    proto: udp, comment: 'WSDD discovery (LAN)' }
+  - { port: '3702',    proto: tcp, comment: 'WSDD SOAP (LAN)' }
+  - { port: '5357',    proto: tcp, comment: 'WSDD HTTP (LAN)' }
+  - { port: '5358',    proto: tcp, comment: 'WSDD HTTPS (LAN)' }
+  - { port: '5355',    proto: udp, comment: 'LLMNR (LAN)' }
+  - { port: '5355',    proto: tcp, comment: 'LLMNR (LAN)' }
+
+# LAN rules to remove (same scope as host_fw_lan_services). Cockpit is reached through the LAN gateway
+# (https://cockpit.<domain>, Caddy on dash1 -> 10.50.190.1:9090).
+host_fw_lan_retired:
+  - { port: '9090', proto: tcp, comment: 'Cockpit (LAN)' }
+
+# Services reachable from specific guests only.
+# (Ollama for bot1 moved to vm_isolation's warp-dmz host_services.)
+host_fw_guest_services: []
+
+# Rules from before this role existed. These allowed "Anywhere" on any
+# interface, including VM bridges and wg1. Deleting a rule that's already
+# gone is a no-op.
+host_fw_legacy_rules:
+  - { name: SSH }
+  - { name: Samba }
+  - { port: '22' }
+  - { port: '22',    proto: tcp }
+  - { port: '22',    proto: udp }
+  - { port: '9090',  proto: tcp }
+  - { port: '3702',  proto: udp }
+  - { port: '3702',  proto: tcp }
+  - { port: '5357',  proto: tcp }
+  - { port: '5358',  proto: tcp }
+  - { port: '5355',  proto: udp }
+  - { port: '5355',  proto: tcp }
+  - { port: '11434', proto: tcp }

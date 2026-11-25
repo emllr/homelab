@@ -1,0 +1,16 @@
+---
+- name: restart smartd
+  ansible.builtin.systemd:
+    name: smartd
+    state: restarted
+
+- name: restart zed
+  ansible.builtin.systemd:
+    name: zfs-zed
+    state: restarted
+
+- name: restart scrub timer
+  ansible.builtin.systemd:
+    name: "zfs-scrub-monthly@{{ disk_health_pool }}.timer"
+    state: restarted
+    daemon_reload: true

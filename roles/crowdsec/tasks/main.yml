@@ -1,0 +1,264 @@
+---
+# ---- real client IP behind cloudflared ---------------------------------------
+- name: nginx front for an app served directly by cloudflared
+  when: crowdsec_nginx_front | length > 0
+  block:
+    - name: nginx
+      ansible.builtin.apt: { name: nginx, state: present }
+    # Cloudflare asks origins for "br, gzip" (never zstd), so brotli is the encoding it
+    # can use. Level 5 is ~20-35% smaller than gzip -6 on the app's HTML.
+    - name: nginx brotli module
+      ansible.builtin.apt: { name: libnginx-mod-http-brotli-filter, state: present }
+      notify: reload nginx
+    - name: No default site (it would listen on :80 on all interfaces)
+      ansible.builtin.file: { path: /etc/nginx/sites-enabled/default, state: absent }
+      notify: reload nginx
+    - name: Front site
+      ansible.builtin.copy:
+        dest: /etc/nginx/sites-available/crowdsec-front.conf
+        mode: '0644'
+        content: |
+          # Managed by homelab (crowdsec role). cloudflared -> here -> the app: an
+          # access log with the real client IP (cloudflare-realip.conf) for CrowdSec, gzip
+          # (the app runs with Next's compression off), and balancing over the app's replicas.
+          map $http_upgrade $connection_upgrade { default upgrade; '' ''; }
+          upstream crowdsec_front_app {
+            least_conn;
+          {% set front_upstreams = crowdsec_nginx_front.upstreams if 'upstreams' in crowdsec_nginx_front else [crowdsec_nginx_front.upstream | regex_replace('^https?://', '')] %}
+          {% for u in front_upstreams %}
+            server {{ u }} max_fails=2 fail_timeout=10s;
+          {% endfor %}
+            keepalive 32;
+          }
+          server {
+            listen {{ crowdsec_nginx_front.listen }};
+            server_name _;
+            client_max_body_size 100m;
+            access_log /var/log/nginx/access.log;
+            # Origin -> Cloudflare goes over the home uplink. Cloudflare requests
+            # "accept-encoding: br, gzip" (all plans; never zstd): brotli when offered, gzip
+            # otherwise. HTML is ~8x smaller as br, ~6x as gzip.
+            gzip on;
+            gzip_proxied any;
+            gzip_vary on;
+            gzip_comp_level 6;
+            gzip_min_length 1024;
+            gzip_types text/plain text/css text/xml text/javascript application/javascript
+                       application/json application/xml application/rss+xml application/manifest+json
+                       text/x-component image/svg+xml;
+            brotli on;
+            brotli_comp_level 5;
+            brotli_min_length 1024;
+            brotli_types text/plain text/css text/xml text/javascript application/javascript
+                         application/json application/xml application/rss+xml application/manifest+json
+                         text/x-component image/svg+xml;
+            location / {
+              proxy_pass http://crowdsec_front_app;
+              proxy_http_version 1.1;
+              proxy_set_header Host $http_host;
+              proxy_set_header Upgrade $http_upgrade;
+              # "" (keepalive to the app) unless the client upgrades.
+              proxy_set_header Connection $connection_upgrade;
+              # Keep cloudflared's values; don't append nginx's view.
+              proxy_set_header X-Forwarded-For $http_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+              # A replica being replaced (deploy) or down: try the next one. nginx retries
+              # only idempotent requests, and only before anything was sent to the client.
+              proxy_next_upstream error timeout http_502 http_503;
+              proxy_next_upstream_tries 3;
+              proxy_connect_timeout 2s;
+              proxy_buffering off;
+              proxy_request_buffering off;
+              proxy_read_timeout 300s;
+              proxy_send_timeout 300s;
+            }
+          }
+      notify: reload nginx
+    - name: Enable the front site
+      ansible.builtin.file:
+        src: /etc/nginx/sites-available/crowdsec-front.conf
+        dest: /etc/nginx/sites-enabled/crowdsec-front.conf
+        state: link
+      notify: reload nginx
+    - name: nginx running
+      ansible.builtin.systemd: { name: nginx, enabled: true, state: started }
+
+- name: nginx real IP from CF-Connecting-IP (loopback only)
+  ansible.builtin.copy:
+    dest: /etc/nginx/conf.d/cloudflare-realip.conf
+    mode: '0644'
+    content: |
+      # Managed by homelab (crowdsec role). cloudflared connects from loopback;
+      # trust its CF-Connecting-IP header from there only.
+      set_real_ip_from 127.0.0.1;
+      set_real_ip_from ::1;
+      real_ip_header CF-Connecting-IP;
+  when: crowdsec_realip == 'nginx'
+  register: realip_nginx
+  notify: reload nginx
+
+- name: Check nginx config
+  ansible.builtin.command: nginx -t
+  changed_when: false
+  when: crowdsec_realip == 'nginx' and realip_nginx.changed
+
+- name: Apache remoteip module
+  ansible.builtin.command: a2enmod -q remoteip
+  args:
+    creates: /etc/apache2/mods-enabled/remoteip.load
+  when: crowdsec_realip == 'apache'
+  notify: reload apache
+
+- name: Apache real IP from CF-Connecting-IP (loopback only) and log it
+  ansible.builtin.copy:
+    dest: /etc/apache2/conf-available/cloudflare-remoteip.conf
+    mode: '0644'
+    content: |
+      # Managed by homelab (crowdsec role). cloudflared connects from loopback;
+      # trust its CF-Connecting-IP header from there only. %a = the real client after remoteip.
+      RemoteIPHeader CF-Connecting-IP
+      RemoteIPInternalProxy 127.0.0.1 ::1
+      LogFormat "%v:%p %a %l %u %t \"%r\" %>s %O \"%{Referer}i\" \"%{User-Agent}i\"" vhost_combined
+      LogFormat "%a %l %u %t \"%r\" %>s %O \"%{Referer}i\" \"%{User-Agent}i\"" combined
+  when: crowdsec_realip == 'apache'
+  register: realip_apache
+  notify: reload apache
+
+- name: Enable the Apache remoteip conf
+  ansible.builtin.command: a2enconf -q cloudflare-remoteip
+  args:
+    creates: /etc/apache2/conf-enabled/cloudflare-remoteip.conf
+  when: crowdsec_realip == 'apache'
+  notify: reload apache
+
+- name: Check Apache config
+  ansible.builtin.command: apache2ctl configtest
+  changed_when: false
+  when: crowdsec_realip == 'apache' and realip_apache.changed
+
+- name: Apply web server changes before CrowdSec starts reading logs
+  ansible.builtin.meta: flush_handlers
+
+# ---- CrowdSec ------------------------------------------------------------------
+- name: Whitelist (never ban these)
+  block:
+    - ansible.builtin.file:
+        path: /etc/crowdsec/parsers/s02-enrich
+        state: directory
+        mode: '0755'
+    - ansible.builtin.copy:
+        dest: /etc/crowdsec/parsers/s02-enrich/homelab-whitelist.yaml
+        mode: '0644'
+        content: |
+          # Managed by homelab (crowdsec role)
+          name: homelab/whitelist
+          description: "Trusted homelab ranges"
+          whitelist:
+            reason: "homelab trusted ranges"
+            cidr:
+          {% for c in crowdsec_whitelist_cidrs %}
+              - {{ c }}
+          {% endfor %}
+      notify: restart crowdsec
+
+- name: gnupg and curl (for the repo key)
+  ansible.builtin.apt:
+    name: [gnupg, curl]
+    state: present
+
+- name: CrowdSec repo signing key
+  ansible.builtin.shell: |
+    install -d -m 0755 /etc/apt/keyrings
+    curl -fsSL https://packagecloud.io/crowdsec/crowdsec/gpgkey | gpg --dearmor --yes -o /etc/apt/keyrings/crowdsec.gpg
+  args:
+    creates: /etc/apt/keyrings/crowdsec.gpg
+
+- name: CrowdSec apt repo
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/crowdsec.list
+    mode: '0644'
+    content: "deb [signed-by=/etc/apt/keyrings/crowdsec.gpg] https://packagecloud.io/crowdsec/crowdsec/{{ crowdsec_repo_os }}/ {{ crowdsec_repo_dist }} main\n"
+  register: crowdsec_repo
+
+- name: Install CrowdSec
+  ansible.builtin.apt:
+    name: "{{ ['crowdsec'] + (['crowdsec-firewall-bouncer-nftables'] if crowdsec_firewall_bouncer else []) }}"
+    update_cache: "{{ crowdsec_repo.changed }}"
+    state: present
+
+- name: CrowdSec logs to stdout (journal; Alloy already ships the journal to obs1)
+  ansible.builtin.copy:
+    dest: /etc/crowdsec/config.yaml.local
+    mode: '0644'
+    content: |
+      # Managed by homelab (crowdsec role). Merged over config.yaml by CrowdSec.
+      common:
+        log_media: stdout
+      {% if crowdsec_lapi_remote_allow %}
+      # Reachable beyond loopback; crowdsec-lapi-guard (nft) admits only {{ crowdsec_lapi_remote_allow | join(', ') }}.
+      api:
+        server:
+          listen_uri: 0.0.0.0:8080
+      {% endif %}
+  notify: restart crowdsec
+
+- name: LAPI guard (nft) for remote readers
+  when: crowdsec_lapi_remote_allow | length > 0
+  block:
+    - name: nftables
+      ansible.builtin.apt: { name: nftables, state: present }
+    - name: LAPI guard ruleset
+      ansible.builtin.copy:
+        dest: /etc/crowdsec/lapi-guard.nft
+        mode: '0644'
+        content: |
+          # Managed by homelab (crowdsec role). Own table; leaves other tables (Docker's) alone.
+          table inet crowdsec_lapi_guard {}
+          delete table inet crowdsec_lapi_guard
+          table inet crowdsec_lapi_guard {
+            chain input {
+              type filter hook input priority filter; policy accept;
+              tcp dport 8080 iifname "lo" accept
+              tcp dport 8080 ip saddr { {{ crowdsec_lapi_remote_allow | join(', ') }} } accept
+              tcp dport 8080 drop
+            }
+          }
+      notify: reload lapi guard
+    - name: LAPI guard unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/crowdsec-lapi-guard.service
+        mode: '0644'
+        content: |
+          # Managed by homelab (crowdsec role)
+          [Unit]
+          Description=Restrict CrowdSec LAPI (8080) to loopback and hv1
+          Before=crowdsec.service network-pre.target
+          Wants=network-pre.target
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=/usr/sbin/nft -f /etc/crowdsec/lapi-guard.nft
+          ExecReload=/usr/sbin/nft -f /etc/crowdsec/lapi-guard.nft
+          ExecStop=/usr/sbin/nft delete table inet crowdsec_lapi_guard
+          [Install]
+          WantedBy=multi-user.target
+      notify: reload lapi guard
+    - name: LAPI guard active (before CrowdSec listens beyond loopback)
+      ansible.builtin.systemd: { name: crowdsec-lapi-guard, enabled: true, state: started, daemon_reload: true }
+
+- name: CrowdSec running
+  ansible.builtin.systemd:
+    name: crowdsec
+    enabled: true
+    state: started
+
+- name: Read-only bouncer key for {{ crowdsec_remote_bouncer }}
+  when: crowdsec_remote_bouncer | length > 0
+  no_log: true
+  ansible.builtin.shell: |
+    cscli bouncers list -o raw | grep -q '^{{ crowdsec_remote_bouncer }},' && exit 0
+    cscli bouncers add '{{ crowdsec_remote_bouncer }}' -k '{{ vault_crowdsec_lapi_keys[inventory_hostname] }}' >/dev/null
+    echo added
+  register: cs_bouncer_add
+  changed_when: "'added' in cs_bouncer_add.stdout"
+

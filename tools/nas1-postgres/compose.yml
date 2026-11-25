@@ -1,0 +1,46 @@
+# nas1 (Synology) /srv/db1-postgres: streaming replica of db1 + SFTP target for db1's pgBackRest.
+# Deployed by deploy.sh.
+name: db1-postgres
+services:
+  replica:
+    # Must be the Debian (glibc 2.41) image of db1's major version: Alpine's libc sorts text differently,
+    # which corrupts the replicated indexes. Keep the minor version at or above db1's.
+    image: postgres:18.7-trixie
+    container_name: db1-replica
+    restart: unless-stopped
+    user: "999:999"
+    command:
+      - postgres
+      - -c
+      - config_file=/etc/pg/postgresql.conf
+    environment:
+      PGDATA: /var/lib/postgresql/18/main
+    volumes:
+      - ./data:/var/lib/postgresql
+      - ./conf:/etc/pg:ro
+    ports:
+      - "127.0.0.1:5433:5432"      # nas1 itself only; DSM's own Postgres has 5432
+    shm_size: 1g
+    mem_limit: 10g
+    stop_grace_period: 5m
+    healthcheck:
+      test: ["CMD", "pg_isready", "-q", "-h", "/var/run/postgresql", "-U", "postgres"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10m
+      retries: 5
+    logging: { driver: json-file, options: { max-size: 20m, max-file: "5" } }
+
+  sftp:
+    build: ./sftp
+    image: db1-backup-sftp:1
+    container_name: db1-backup-sftp
+    restart: unless-stopped
+    volumes:
+      - ./repo:/srv/repo
+      - ./status:/srv/status:ro             # snapshot status, read by db1's hourly check
+      - ./sftp-state:/etc/ssh/state:ro      # host key and authorized_keys
+    ports:
+      - "10.50.1.114:2222:2222"
+    mem_limit: 1g
+    logging: { driver: json-file, options: { max-size: 10m, max-file: "3" } }

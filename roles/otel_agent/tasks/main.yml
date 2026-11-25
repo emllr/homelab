@@ -1,0 +1,139 @@
+---
+# Grafana Alloy from the official release (static binary, checksum-verified), not the distro
+# package, so it doesn't depend on the host's package-database state.
+
+- name: unzip (to unpack the Alloy release)
+  ansible.builtin.package:
+    name: unzip
+    state: present
+
+- name: alloy system user (reads the journal)
+  ansible.builtin.user:
+    name: alloy
+    system: true
+    shell: /usr/sbin/nologin
+    home: /var/lib/alloy
+    create_home: false
+    groups: [systemd-journal]
+    append: true
+
+- name: Alloy directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+    mode: "{{ item.mode | default('0755') }}"
+  loop:
+    - { path: "/opt/alloy/{{ alloy_version }}" }
+    - { path: /etc/alloy, group: alloy, mode: '0750' }
+    - { path: /var/lib/alloy, owner: alloy, group: alloy, mode: '0750' }
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Download Alloy release (checksum-verified)
+  ansible.builtin.get_url:
+    url: "{{ alloy_url }}"
+    dest: "/opt/alloy/{{ alloy_version }}/alloy-linux-amd64.zip"
+    checksum: "sha256:{{ alloy_sha256sums_url }}"
+    mode: '0644'
+
+- name: Unpack Alloy
+  ansible.builtin.unarchive:
+    src: "/opt/alloy/{{ alloy_version }}/alloy-linux-amd64.zip"
+    dest: "/opt/alloy/{{ alloy_version }}"
+    remote_src: true
+    creates: "/opt/alloy/{{ alloy_version }}/alloy-linux-amd64"
+
+# The release zip doesn't carry the executable bit.
+- name: Make the Alloy binary executable
+  ansible.builtin.file:
+    path: "/opt/alloy/{{ alloy_version }}/alloy-linux-amd64"
+    mode: '0755'
+  notify: restart alloy
+
+- name: Link the current Alloy version
+  ansible.builtin.file:
+    src: "/opt/alloy/{{ alloy_version }}/alloy-linux-amd64"
+    dest: /usr/local/bin/alloy
+    state: link
+    force: true
+  notify: restart alloy
+
+- name: Docker container logs (optional)
+  ansible.builtin.import_tasks: docker-logs.yml
+  when: otel_agent_docker_logs | default(false)
+
+- name: Postgres monitoring role for Alloy (pg_monitor; peer auth over the local socket)
+  when: otel_agent_postgres is defined
+  # runuser, not become_user: some hosts set ansible_become: false, which overrides become.
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - postgres
+      - --
+      - psql
+      - -XAtq
+      - -v
+      - ON_ERROR_STOP=1
+      - -d
+      - "{{ otel_agent_postgres.database }}"
+      - -c
+      - >-
+        DO $$ BEGIN
+          IF pg_is_in_recovery() THEN RETURN; END IF;  -- a standby gets the role from its primary
+          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'alloy') THEN CREATE ROLE alloy LOGIN; END IF;
+          GRANT pg_monitor TO alloy;
+          EXECUTE format('GRANT CONNECT ON DATABASE %I TO alloy', current_database());
+        END $$;
+  changed_when: false
+
+- name: Alloy config (contains the origin's bearer token)
+  ansible.builtin.template:
+    src: config.alloy.j2
+    dest: /etc/alloy/config.alloy
+    owner: root
+    group: alloy
+    mode: '0640'
+  notify: restart alloy
+
+- name: Alloy systemd unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/alloy.service
+    mode: '0644'
+    content: |
+      # Managed by homelab (otel_agent role)
+      [Unit]
+      Description=Grafana Alloy (host telemetry -> obs1)
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      User=alloy
+      Group=alloy
+      SupplementaryGroups=systemd-journal
+      ExecStart=/usr/local/bin/alloy run --storage.path=/var/lib/alloy --server.http.listen-addr=127.0.0.1:12345 /etc/alloy/config.alloy
+      Restart=on-failure
+      RestartSec=5
+      {% if alloy_memory_max | default('') %}
+      MemoryMax={{ alloy_memory_max }}
+      Environment=GOMEMLIMIT={{ alloy_gomemlimit | default('') }}
+      {% endif %}
+      NoNewPrivileges=yes
+      ProtectSystem=strict
+      ProtectHome=yes
+      ReadWritePaths=/var/lib/alloy
+      PrivateTmp=yes
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: restart alloy
+
+- name: Enable and start Alloy
+  ansible.builtin.systemd:
+    name: alloy
+    enabled: true
+    state: started
+    daemon_reload: true
+  ignore_errors: "{{ ansible_check_mode }}"

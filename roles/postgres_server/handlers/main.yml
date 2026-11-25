@@ -1,0 +1,5 @@
+---
+- name: reload postgres
+  ansible.builtin.command: "pg_ctlcluster {{ pg_version }} {{ pg_cluster }} reload"
+  changed_when: true
+  failed_when: false

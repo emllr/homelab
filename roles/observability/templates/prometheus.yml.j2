@@ -1,0 +1,54 @@
+# {{ ansible_managed }}
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# OTLP ingest (--web.enable-otlp-receiver). Promote these resource attributes to labels.
+otlp:
+  promote_resource_attributes:
+    - service.name
+    - service.namespace
+    - service.instance.id
+    - host.name
+    - telemetry.origin
+    - deployment.environment
+
+storage:
+  tsdb:
+    out_of_order_time_window: 30m
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs: [{ targets: ['localhost:9090'] }]
+  - job_name: otelcol
+    static_configs: [{ targets: ['otelcol:8888'] }]
+  - job_name: loki
+    static_configs: [{ targets: ['loki:3100'] }]
+  - job_name: tempo
+    static_configs: [{ targets: ['tempo:3200'] }]
+  - job_name: grafana
+{% if obs_grafana_tls %}
+    scheme: https
+    tls_config: { server_name: {{ obs_grafana_hostname }} }
+{% endif %}
+    static_configs: [{ targets: ['grafana:3000'] }]
+  - job_name: node
+    static_configs:
+      - targets: ['node-exporter:9100']
+        labels: { host_name: obs1, telemetry_origin: obs1 }
+  # Public sites, probed through the blackbox exporter (alerts in grafana-alerting.yaml.j2)
+  - job_name: blackbox
+    metrics_path: /probe
+    params: { module: [https_2xx] }
+    scrape_interval: 60s
+    scrape_timeout: 20s
+    static_configs:
+      - targets:
+{% for t in obs_probe_targets %}
+          - {{ t }}
+{% endfor %}
+    relabel_configs:
+      - { source_labels: [__address__], target_label: __param_target }
+      - { source_labels: [__param_target], target_label: instance }
+      - { target_label: __address__, replacement: 'blackbox:9115' }
+

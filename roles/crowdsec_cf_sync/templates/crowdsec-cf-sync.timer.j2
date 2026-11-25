@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Run crowdsec-cf-sync every {{ crowdsec_cf_sync_interval }}
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec={{ crowdsec_cf_sync_interval }}
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,69 @@
+# {{ ansible_managed }}
+# One OTLP/HTTP receiver per origin. The receiver's port decides telemetry.origin (upserted
+# below, so senders can't spoof it) and each has its own bearer-token file.
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+{% for o in obs_origins %}
+  bearertokenauth/{{ o.name }}:
+    filename: /etc/otelcol/secrets/{{ o.name }}.tokens
+{% endfor %}
+
+receivers:
+{% for o in obs_origins %}
+  otlp/{{ o.name }}:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:{{ o.port }}
+        auth:
+          authenticator: bearertokenauth/{{ o.name }}
+{% endfor %}
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 75
+    spike_limit_percentage: 20
+  batch: {}
+{% for o in obs_origins %}
+  resource/{{ o.name }}:
+    attributes:
+      - { key: telemetry.origin, value: "{{ o.name }}", action: upsert }
+{% endfor %}
+
+exporters:
+  otlphttp/prometheus:
+    endpoint: http://prometheus:9090/api/v1/otlp
+    tls: { insecure: true }
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+    tls: { insecure: true }
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls: { insecure: true }
+
+service:
+  extensions: [health_check{% for o in obs_origins %}, bearertokenauth/{{ o.name }}{% endfor %}]
+  telemetry:
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+  pipelines:
+{% for o in obs_origins %}
+    metrics/{{ o.name }}:
+      receivers: [otlp/{{ o.name }}]
+      processors: [memory_limiter, resource/{{ o.name }}, batch]
+      exporters: [otlphttp/prometheus]
+    logs/{{ o.name }}:
+      receivers: [otlp/{{ o.name }}]
+      processors: [memory_limiter, resource/{{ o.name }}, batch]
+      exporters: [otlphttp/loki]
+    traces/{{ o.name }}:
+      receivers: [otlp/{{ o.name }}]
+      processors: [memory_limiter, resource/{{ o.name }}, batch]
+      exporters: [otlp/tempo]
+{% endfor %}

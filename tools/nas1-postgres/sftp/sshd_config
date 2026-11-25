@@ -1,0 +1,18 @@
+Port 2222
+HostKey /etc/ssh/state/ssh_host_ed25519_key
+AuthorizedKeysFile /etc/ssh/state/authorized_keys
+AllowUsers pgbackup
+AuthenticationMethods publickey
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+UsePAM no
+DisableForwarding yes
+PermitTTY no
+Subsystem sftp internal-sftp
+ForceCommand internal-sftp
+ChrootDirectory /srv
+MaxStartups 30:30:60
+MaxSessions 4
+ClientAliveInterval 30
+LogLevel INFO

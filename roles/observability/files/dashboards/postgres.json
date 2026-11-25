@@ -1,0 +1,1472 @@
+{
+  "uid": "homelab-postgres",
+  "title": "Postgres",
+  "tags": [
+    "homelab",
+    "infra",
+    "database"
+  ],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "schemaVersion": 39,
+  "links": [
+    {
+      "type": "dashboards",
+      "tags": [
+        "homelab"
+      ],
+      "asDropdown": true,
+      "title": "Homelab",
+      "includeVars": false,
+      "keepTime": true
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "host",
+        "label": "Host",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prom"
+        },
+        "query": {
+          "query": "label_values(pg_up{job=\"integrations/postgres\"}, host_name)",
+          "refId": "h"
+        },
+        "refresh": 2,
+        "current": {}
+      },
+      {
+        "name": "db",
+        "label": "Database",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prom"
+        },
+        "query": {
+          "query": "label_values(pg_stat_database_xact_commit{host_name=\"$host\", datname!~\"template.*|postgres\"}, datname)",
+          "refId": "d"
+        },
+        "refresh": 2,
+        "current": {}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Overview",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Up",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": null,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(pg_up{job=\"integrations/postgres\", host_name=\"$host\"})",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "id": 2,
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 3,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Transactions / s",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(pg_stat_database_xact_commit{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}[5m]) + rate(pg_stat_database_xact_rollback{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}[5m]))",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "id": 3,
+      "gridPos": {
+        "x": 3,
+        "y": 1,
+        "w": 3,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Connections",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": null,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 500
+              },
+              {
+                "color": "red",
+                "value": 800
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(pg_stat_database_numbackends{job=\"integrations/postgres\", host_name=\"$host\"})",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "description": "All databases; max_connections is 1000.",
+      "id": 4,
+      "gridPos": {
+        "x": 6,
+        "y": 1,
+        "w": 3,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Cache hit",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.95
+              },
+              {
+                "color": "green",
+                "value": 0.99
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(pg_stat_database_blks_hit{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}[15m])) / clamp_min(sum(rate(pg_stat_database_blks_hit{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}[15m])) + sum(rate(pg_stat_database_blks_read{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}[15m])), 1e-9)",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "description": "Share of block reads served from shared_buffers (reads that miss may still hit the OS page cache).",
+      "id": 5,
+      "gridPos": {
+        "x": 9,
+        "y": 1,
+        "w": 3,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Database size",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "decimals": null,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(pg_database_size_bytes{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"})",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "id": 6,
+      "gridPos": {
+        "x": 12,
+        "y": 1,
+        "w": 3,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Longest open transaction",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": null,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 300
+              },
+              {
+                "color": "red",
+                "value": 1800
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(pg_stat_activity_max_tx_duration{job=\"integrations/postgres\", host_name=\"$host\"})",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "description": "Long transactions hold back vacuum and bloat tables.",
+      "id": 7,
+      "gridPos": {
+        "x": 15,
+        "y": 1,
+        "w": 3,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Deadlocks (24 h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": null,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(pg_stat_database_deadlocks{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}[24h]))",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "id": 8,
+      "gridPos": {
+        "x": 18,
+        "y": 1,
+        "w": 3,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Uptime",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": null,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - max(pg_postmaster_start_time_seconds{job=\"integrations/postgres\", host_name=\"$host\"})",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "id": 9,
+      "gridPos": {
+        "x": 21,
+        "y": 1,
+        "w": 3,
+        "h": 4
+      }
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "Activity",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Connections by state and user",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 20,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (state, usename) (pg_stat_activity_count{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}) > 0",
+          "legendFormat": "{{usename}} {{state}}",
+          "range": true
+        }
+      ],
+      "description": "Roles: user = dev1's app, workers and scheduler; exampleapp_web = web1.",
+      "id": 11,
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Transactions / s",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(pg_stat_database_xact_commit{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}[$__rate_interval]))",
+          "legendFormat": "commit",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(pg_stat_database_xact_rollback{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}[$__rate_interval]))",
+          "legendFormat": "rollback",
+          "range": true
+        }
+      ],
+      "id": 12,
+      "gridPos": {
+        "x": 8,
+        "y": 6,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Rows / s",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(pg_stat_database_tup_returned{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}[$__rate_interval]))",
+          "legendFormat": "returned (scanned)",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(pg_stat_database_tup_fetched{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}[$__rate_interval]))",
+          "legendFormat": "fetched (by index)",
+          "range": true
+        },
+        {
+          "refId": "C",
+          "expr": "sum(rate(pg_stat_database_tup_inserted{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}[$__rate_interval]))",
+          "legendFormat": "inserted",
+          "range": true
+        },
+        {
+          "refId": "D",
+          "expr": "sum(rate(pg_stat_database_tup_updated{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}[$__rate_interval]))",
+          "legendFormat": "updated",
+          "range": true
+        },
+        {
+          "refId": "E",
+          "expr": "sum(rate(pg_stat_database_tup_deleted{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}[$__rate_interval]))",
+          "legendFormat": "deleted",
+          "range": true
+        }
+      ],
+      "description": "returned far above fetched means sequential scans (see Tables).",
+      "id": 13,
+      "gridPos": {
+        "x": 16,
+        "y": 6,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "id": 14,
+      "type": "row",
+      "title": "Queries (pg_stat_statements, top 50 by total time)",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 14,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Time spent by query (top 10)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 20,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(10, sum by (queryid) (rate(pg_stat_statements_seconds_total{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}[$__rate_interval]))) * on (queryid) group_left(query) max by (queryid, query) (pg_stat_statements_query_id{job=\"integrations/postgres\", host_name=\"$host\"})",
+          "legendFormat": "{{query}}",
+          "range": true
+        }
+      ],
+      "description": "Seconds of execution per second (1 = one backend busy all the time).",
+      "id": 15,
+      "gridPos": {
+        "x": 0,
+        "y": 15,
+        "w": 24,
+        "h": 9
+      }
+    },
+    {
+      "type": "table",
+      "title": "Statements (last 1 h)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (queryid, user) (increase(pg_stat_statements_seconds_total{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}[1h])) * on (queryid) group_left(query) max by (queryid, query) (pg_stat_statements_query_id{job=\"integrations/postgres\", host_name=\"$host\"})",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (queryid, user) (increase(pg_stat_statements_calls_total{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}[1h]))",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "C",
+          "expr": "1000 * sum by (queryid, user) (increase(pg_stat_statements_seconds_total{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}[1h])) / clamp_min(sum by (queryid, user) (increase(pg_stat_statements_calls_total{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}[1h])), 1)",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "D",
+          "expr": "sum by (queryid, user) (increase(pg_stat_statements_rows_total{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}[1h]))",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "E",
+          "expr": "sum by (queryid, user) (increase(pg_stat_statements_block_read_seconds_total{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}[1h]))",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge"
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "user": 0,
+              "query": 1,
+              "Value #A": 2,
+              "Value #B": 3,
+              "Value #C": 4,
+              "Value #D": 5,
+              "Value #E": 6
+            },
+            "renameByName": {
+              "user": "Role",
+              "query": "Query",
+              "Value #A": "Total time",
+              "Value #B": "Calls",
+              "Value #C": "Mean ms",
+              "Value #D": "Rows",
+              "Value #E": "Read I/O time"
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "Total time",
+            "desc": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Total time"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Read I/O time"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Mean ms"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              }
+            ]
+          }
+        ]
+      },
+      "description": "queryid is hidden; the text is the first 150 characters. Read I/O time needs track_io_timing.",
+      "id": 16,
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 24,
+        "h": 10
+      }
+    },
+    {
+      "id": 17,
+      "type": "row",
+      "title": "I/O and checkpoints",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 34,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Blocks / s",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(pg_stat_database_blks_hit{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}[$__rate_interval]))",
+          "legendFormat": "hit (shared_buffers)",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(pg_stat_database_blks_read{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}[$__rate_interval]))",
+          "legendFormat": "read (OS cache or disk)",
+          "range": true
+        }
+      ],
+      "id": 18,
+      "gridPos": {
+        "x": 0,
+        "y": 35,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Block I/O time (ms per s)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(pg_stat_database_blk_read_time{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}[$__rate_interval]))",
+          "legendFormat": "read",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(pg_stat_database_blk_write_time{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}[$__rate_interval]))",
+          "legendFormat": "write",
+          "range": true
+        }
+      ],
+      "description": "Needs track_io_timing.",
+      "id": 19,
+      "gridPos": {
+        "x": 8,
+        "y": 35,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Checkpoints and temp files",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(pg_stat_checkpointer_num_timed_total{job=\"integrations/postgres\", host_name=\"$host\"}[$__rate_interval])) * 3600",
+          "legendFormat": "timed / h",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(pg_stat_checkpointer_num_requested_total{job=\"integrations/postgres\", host_name=\"$host\"}[$__rate_interval])) * 3600",
+          "legendFormat": "requested / h (WAL filled up)",
+          "range": true
+        },
+        {
+          "refId": "C",
+          "expr": "sum(rate(pg_stat_database_temp_files{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}[$__rate_interval])) * 3600",
+          "legendFormat": "temp files / h",
+          "range": true
+        }
+      ],
+      "id": 20,
+      "gridPos": {
+        "x": 16,
+        "y": 35,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "WAL on disk",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(pg_wal_size_bytes{job=\"integrations/postgres\", host_name=\"$host\"})",
+          "legendFormat": "pg_wal size",
+          "range": true
+        }
+      ],
+      "id": 21,
+      "gridPos": {
+        "x": 0,
+        "y": 43,
+        "w": 8,
+        "h": 7
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Locks by mode",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 20,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (mode) (pg_locks_count{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}) > 0",
+          "legendFormat": "{{mode}}",
+          "range": true
+        }
+      ],
+      "id": 22,
+      "gridPos": {
+        "x": 8,
+        "y": 43,
+        "w": 8,
+        "h": 7
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Replication lag",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(pg_replication_lag_seconds{job=\"integrations/postgres\", host_name=\"$host\"})",
+          "legendFormat": "lag",
+          "range": true
+        }
+      ],
+      "description": "Empty until a replica exists (db1 migration).",
+      "id": 23,
+      "gridPos": {
+        "x": 16,
+        "y": 43,
+        "w": 8,
+        "h": 7
+      }
+    },
+    {
+      "id": 24,
+      "type": "row",
+      "title": "Tables",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 50,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Rows read by sequential scans (top 8 tables)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(8, sum by (relname) (rate(pg_stat_user_tables_seq_tup_read{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}[$__rate_interval])))",
+          "legendFormat": "{{relname}}",
+          "range": true
+        }
+      ],
+      "description": "High values on big tables usually mean a missing index.",
+      "id": 25,
+      "gridPos": {
+        "x": 0,
+        "y": 51,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Dead rows (top 8 tables)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(8, max by (relname) (pg_stat_user_tables_n_dead_tup{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}))",
+          "legendFormat": "{{relname}}",
+          "range": true
+        }
+      ],
+      "description": "Rises between autovacuum runs; steady growth means vacuum can't keep up.",
+      "id": 26,
+      "gridPos": {
+        "x": 12,
+        "y": 51,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "table",
+      "title": "Tables",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (relname) (pg_stat_user_tables_table_size_bytes{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}) + max by (relname) (pg_stat_user_tables_index_size_bytes{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"})",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "B",
+          "expr": "max by (relname) (pg_stat_user_tables_n_live_tup{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"})",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "C",
+          "expr": "max by (relname) (pg_stat_user_tables_n_dead_tup{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"})",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "D",
+          "expr": "sum by (relname) (increase(pg_stat_user_tables_seq_scan{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}[1h]))",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "E",
+          "expr": "sum by (relname) (increase(pg_stat_user_tables_idx_scan{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"}[1h]))",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "F",
+          "expr": "time() - max by (relname) (pg_stat_user_tables_last_autovacuum{job=\"integrations/postgres\", host_name=\"$host\", datname=\"$db\"} > 0)",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge"
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "relname": 0,
+              "Value #A": 1,
+              "Value #B": 2,
+              "Value #C": 3,
+              "Value #D": 4,
+              "Value #E": 5,
+              "Value #F": 6
+            },
+            "renameByName": {
+              "relname": "Table",
+              "Value #A": "Size (table + indexes)",
+              "Value #B": "Live rows",
+              "Value #C": "Dead rows",
+              "Value #D": "Seq scans (1 h)",
+              "Value #E": "Index scans (1 h)",
+              "Value #F": "Since autovacuum"
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "Size (table + indexes)",
+            "desc": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Size (table + indexes)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Since autovacuum"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          }
+        ]
+      },
+      "id": 27,
+      "gridPos": {
+        "x": 0,
+        "y": 59,
+        "w": 24,
+        "h": 10
+      }
+    }
+  ],
+  "editable": true,
+  "graphTooltip": 1
+}

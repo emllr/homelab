@@ -1,0 +1,5 @@
+# Short test Sundays 02:00; long test once a year per drive, in months without a scrub
+{% for d in disk_health_hdds %}
+/dev/disk/by-id/{{ disk_health_hdd_prefix }}{{ d.serial }} -a -W 0,0,{{ disk_health_temp_hdd }} -s (S/../../7/02|L/{{ d.long_month }}/10/./06) -m root -M daily
+{% endfor %}
+/dev/disk/by-id/{{ disk_health_nvme }} -a -W 0,0,{{ disk_health_temp_nvme }} -m root -M daily

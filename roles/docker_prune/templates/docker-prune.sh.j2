@@ -1,0 +1,18 @@
+#!/bin/bash
+# {{ ansible_managed }} (roles/docker_prune). Logs to the journal (unit docker-prune).
+set -u
+df_free() { df -B1G --output=avail / | tail -1 | tr -d ' '; }
+before=$(df_free)
+echo "free before: ${before} GB"
+docker builder prune -f --keep-storage {{ docker_prune_keep_build_cache }} 2>&1 | tail -1 | sed 's/^/build cache: /'
+docker image prune -f 2>&1 | tail -1 | sed 's/^/dangling images: /'
+{% if docker_prune_volumes %}
+major=$(docker version --format '{{ '{{' }}.Server.Version{{ '}}' }}' 2>/dev/null | cut -d. -f1)
+if [ "${major:-0}" -ge 23 ] 2>/dev/null; then
+  # Since Docker 23, `volume prune` removes only anonymous unused volumes; named ones need -a (never used here).
+  docker volume prune -f 2>&1 | tail -1 | sed 's/^/anonymous volumes: /'
+else
+  echo "anonymous volumes: skipped (Docker server ${major:-?} < 23 would also delete named volumes)"
+fi
+{% endif %}
+echo "free after: $(df_free) GB (freed $(( $(df_free) - before )) GB)"

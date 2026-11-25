@@ -1,0 +1,12 @@
+{# {{ ansible_managed }} -- JSON has no comments; see roles/crowdsec_cf_sync #}
+{% set cfg = {
+  "dry_run": crowdsec_cf_sync_dry_run | bool,
+  "max_add": crowdsec_cf_sync_max_add | int,
+  "max_items": crowdsec_cf_sync_max_items | int,
+  "never": crowdsec_cf_sync_never,
+  "lapis": [],
+  "targets": [],
+} %}
+{% for l in crowdsec_cf_sync_lapis %}{% set _ = cfg.lapis.append({"name": l.name, "url": l.url, "key_cred": "lapi-" ~ l.name}) %}{% endfor %}
+{% for t in crowdsec_cf_sync_targets %}{% set _ = cfg.targets.append({"name": t.name, "account_id": t.account_id, "list_name": t.list_name | default("homelab_bans"), "token_cred": "cf-" ~ t.name}) %}{% endfor %}
+{{ cfg | to_nice_json }}

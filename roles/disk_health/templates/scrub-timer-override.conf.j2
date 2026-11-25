@@ -1,0 +1,6 @@
+# Managed by homelab (roles/disk_health). Overrides the packaged monthly schedule.
+[Unit]
+Description=Scheduled zpool scrub of %i
+[Timer]
+OnCalendar=
+OnCalendar={{ disk_health_scrub_on_calendar }}

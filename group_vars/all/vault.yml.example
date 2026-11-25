@@ -22,3 +22,15 @@ wireguard_tunnels:
 
 samba_users:
   - { name: user, password: secret }
+
+# One token per telemetry origin (obs_origins)
+vault_otlp_tokens: { hv1: "48-random-characters" }
+vault_grafana_admin_password: "change-me"
+vault_ntfy_grafana_token: "tk_example"
+vault_crowdsec_lapi_keys: { web1: "48-random-characters" }
+vault_cloudflare_lists_tokens: { target: "token" }       # account lists edit; a target without one is skipped
+vault_homarr_key: "64-hex-characters"                    # never change once Homarr has data
+vault_homarr_api_key: "key"                              # tools/homarr only
+vault_gmail_app_password: "app-password"                 # empty leaves /etc/msmtp.pass alone
+vault_pg_replication_password: "change-me"
+vault_pgbackrest_repo2_cipher_pass: "long-random-passphrase"

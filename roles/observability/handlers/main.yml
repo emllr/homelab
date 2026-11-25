@@ -1,0 +1,4 @@
+---
+- name: restart otelcol
+  ansible.builtin.command: docker compose -f {{ obs_root }}/compose.yml restart otelcol
+  when: not ansible_check_mode

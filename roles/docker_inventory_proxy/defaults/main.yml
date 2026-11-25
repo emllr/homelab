@@ -1,0 +1,11 @@
+---
+# Read-only Docker *inventory* for Homarr: an nginx path allowlist in front of the Docker socket.
+# Allows GET/HEAD on /_ping, /version, /containers/json (the list: no environment) and
+# /containers/<id>/stats. Everything else -> 403, including /containers/<id>/json (inspect returns
+# the container's full environment, i.e. .env secrets), logs, exec, images, events and all writes.
+#
+dip_root: /opt/docker-inventory-proxy
+dip_image: nginx:1.29.3-alpine
+dip_listen_ip: ""          # this host's isolated-network address (required)
+dip_port: 2375
+dip_allow_from: ""         # the only client: hv1's address on this host's network (required)

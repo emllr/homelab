@@ -1,0 +1,242 @@
+{
+  "uid": "homelab-logs-containers",
+  "title": "Logs \u00b7 Containers (infra)",
+  "tags": [
+    "homelab",
+    "logs"
+  ],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "schemaVersion": 39,
+  "links": [
+    {
+      "type": "dashboards",
+      "tags": [
+        "homelab"
+      ],
+      "asDropdown": true,
+      "title": "Homelab",
+      "includeVars": false,
+      "keepTime": true
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "container",
+        "label": "Container",
+        "type": "query",
+        "datasource": {
+          "type": "loki",
+          "uid": "loki"
+        },
+        "query": {
+          "label": "service_name",
+          "stream": "",
+          "type": 1,
+          "refId": "container"
+        },
+        "regex": "/^(blitzbrowser.*|exampleapp-(redis|caddy|wireproxy).*|homarr.*|docker-inventory.*|pn-.*)$/",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": "blitzbrowser.*|exampleapp-(redis|caddy|wireproxy).*|homarr.*|docker-inventory.*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "search",
+        "label": "Search",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Lines by container",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 70,
+            "lineWidth": 0,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (service_name) (count_over_time({service_name=~\"$container\"} |= `$search` [$__auto]))",
+          "legendFormat": "{{service_name}}",
+          "queryType": "range"
+        }
+      ],
+      "id": 1,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 16,
+        "h": 7
+      }
+    },
+    {
+      "type": "table",
+      "title": "Errors/warnings by container",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (service_name) (count_over_time({service_name=~\"$container\"} |= `$search` |~ \"(?i)(error|warn|fail|fatal|panic| ERR | WRN )\" [$__range]))",
+          "instant": true,
+          "queryType": "instant",
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "service_name": 0,
+              "Value": 1
+            },
+            "renameByName": {
+              "service_name": "Container",
+              "Value": "Lines"
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "Lines",
+            "desc": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "description": "Text match on error/warn/fail/fatal/panic (these containers don't share a format).",
+      "id": 2,
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 8,
+        "h": 7
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Errors and warnings",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "dedupStrategy": "none",
+        "showLabels": false,
+        "showCommonLabels": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service_name=~\"$container\"} |= `$search` |~ \"(?i)(error|warn|fail|fatal|panic| ERR | WRN )\" | line_format `{{ printf \"%-30s\" .service_name }} {{ __line__ }}`",
+          "queryType": "range"
+        }
+      ],
+      "id": 3,
+      "gridPos": {
+        "x": 0,
+        "y": 7,
+        "w": 24,
+        "h": 10
+      }
+    },
+    {
+      "type": "logs",
+      "title": "All lines",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "dedupStrategy": "none",
+        "showLabels": false,
+        "showCommonLabels": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service_name=~\"$container\"} |= `$search` | line_format `{{ printf \"%-30s\" .service_name }} {{ __line__ }}`",
+          "queryType": "range"
+        }
+      ],
+      "description": "blitzbrowser's colour codes and wireproxy's DEBUG keepalives are removed by Alloy.",
+      "id": 4,
+      "gridPos": {
+        "x": 0,
+        "y": 17,
+        "w": 24,
+        "h": 16
+      }
+    }
+  ],
+  "editable": true,
+  "graphTooltip": 1
+}

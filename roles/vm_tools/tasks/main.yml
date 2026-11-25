@@ -1,0 +1,6 @@
+---
+# hv1: the `vm` helper (guest-agent exec/shell/copy, serial console) + zsh completion.
+- name: vm helper
+  ansible.builtin.copy: { src: vm.py, dest: /usr/local/bin/vm, mode: '0755' }
+- name: zsh completion for vm
+  ansible.builtin.copy: { src: _vm, dest: /usr/share/zsh/site-functions/_vm, mode: '0644' }

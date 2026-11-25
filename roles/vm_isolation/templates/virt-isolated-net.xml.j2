@@ -1,0 +1,34 @@
+<network>
+  <name>{{ net.name }}</name>
+{% if net_uuid | default('') %}
+  <uuid>{{ net_uuid }}</uuid>
+{% endif %}
+  <forward dev='{{ net.wan_if }}' mode='nat'>
+    <nat>
+      <port start='1024' end='65535'/>
+    </nat>
+    <interface dev='{{ net.wan_if }}'/>
+  </forward>
+  <bridge name='{{ net.bridge }}' stp='on' delay='0'/>
+  <!-- Guests on this bridge cannot talk to each other at L2, only to the host. -->
+  <port isolated='yes'/>
+  <domain name='{{ net.name }}' localOnly='yes'/>
+  <dns>
+{% for f in net.dns_forwarders %}
+    <forwarder addr='{{ f }}'/>
+{% endfor %}
+{% for h in net.dns_hosts %}
+    <host ip='{{ h.ip }}'>
+      <hostname>{{ h.hostname }}</hostname>
+    </host>
+{% endfor %}
+  </dns>
+  <ip address='{{ net.gateway }}' netmask='{{ net.netmask }}'>
+    <dhcp>
+      <range start='{{ net.dhcp_range[0] }}' end='{{ net.dhcp_range[1] }}'/>
+{% for g in net.guests %}
+      <host mac='{{ g.mac }}' name='{{ g.name }}' ip='{{ g.ip }}'/>
+{% endfor %}
+    </dhcp>
+  </ip>
+</network>

@@ -1,0 +1,18 @@
+---
+- name: reload vm isolation firewall
+  ansible.builtin.systemd:
+    name: vm-isolation-firewall
+    state: reloaded
+    daemon_reload: true
+  ignore_errors: "{{ ansible_check_mode }}"
+
+- name: restart vm relays
+  ansible.builtin.systemd:
+    name: "vm-relay-{{ item.name }}.socket"
+    state: restarted
+    daemon_reload: true
+  ignore_errors: "{{ ansible_check_mode }}"
+  # Only relays whose units changed: restarting a socket drops its live connections (Postgres, Redis).
+  loop: "{{ (relay_socket_units.results + relay_service_units.results) | selectattr('changed') | map(attribute='item') | unique }}"
+  loop_control:
+    label: "{{ item.name }}"

@@ -1,0 +1,73 @@
+---
+# Docker container logs without giving Alloy the Docker socket (that's root-equivalent) and
+# without reading config.v2.json (it holds each container's environment, including secrets).
+# A root timer keeps /var/log/docker-containers/<name>.log symlinks pointing at each container's
+# current *-json.log and grants the alloy user read access to those files only.
+
+- name: acl tools (setfacl)
+  ansible.builtin.package:
+    name: acl
+    state: present
+
+- name: Docker log link script
+  ansible.builtin.copy:
+    dest: /usr/local/sbin/docker-log-links
+    mode: '0755'
+    content: |
+      #!/bin/sh
+      # Managed by homelab (otel_agent role). Runs as root from docker-log-links.timer.
+      set -eu
+      D=/var/log/docker-containers
+      R=/var/lib/docker/containers
+      mkdir -p "$D"; chmod 0755 "$D"
+      setfacl -m u:alloy:x /var/lib/docker "$R"
+      docker ps -a --no-trunc --format '{{ '{{' }}.ID{{ '}}' }} {{ '{{' }}.Names{{ '}}' }}' | while read -r id name; do
+        f="$R/$id/$id-json.log"
+        [ -e "$f" ] || continue
+        setfacl -m u:alloy:x "$R/$id"
+        setfacl -m u:alloy:r "$f"
+        [ "$(readlink "$D/$name.log" 2>/dev/null || true)" = "$f" ] || ln -sfn "$f" "$D/$name.log"
+      done
+      # links to removed containers
+      find "$D" -maxdepth 1 -xtype l -delete
+
+- name: Docker log link service and timer
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item.name }}"
+    mode: '0644'
+    content: "{{ item.content }}"
+  loop:
+    - name: docker-log-links.service
+      content: |
+        # Managed by homelab (otel_agent role)
+        [Unit]
+        Description=Expose Docker container log files to the log shipper (by name, read-only)
+        After=docker.service
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/local/sbin/docker-log-links
+    - name: docker-log-links.timer
+      content: |
+        # Managed by homelab (otel_agent role)
+        [Unit]
+        Description=Refresh Docker log links every 30 s (new/recreated containers, rotated files)
+        [Timer]
+        OnBootSec=30s
+        OnUnitActiveSec=30s
+        AccuracySec=5s
+        [Install]
+        WantedBy=timers.target
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Enable the Docker log link timer and run it once
+  ansible.builtin.systemd:
+    name: "{{ item.name }}"
+    enabled: "{{ item.enabled }}"
+    state: started
+    daemon_reload: true
+  loop:
+    - { name: docker-log-links.timer, enabled: true }
+    - { name: docker-log-links.service, enabled: false }
+  loop_control:
+    label: "{{ item.name }}"

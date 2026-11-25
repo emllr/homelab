@@ -1,0 +1,80 @@
+---
+# Postgres server on a dedicated VM (db1).
+pg_version: 18
+pg_cluster: main
+pg_data_disk: /dev/disk/by-id/virtio-db1-data        # virt-install serial=db1-data
+pg_backup_disk: /dev/disk/by-id/virtio-db1-backup    # on pool0 (HDD raidz)
+pg_backup_mount: /var/lib/pgbackrest
+pg_database: exampleapp
+
+# While db1 is a streaming replica of dev1, these must be >= dev1's values
+# (hot standby refuses to start otherwise): max_connections 1000, max_worker_processes 8,
+# max_wal_senders 10, max_prepared_transactions 0, max_locks_per_transaction 64.
+# Keep max_connections at 1000 until dev1's pools are
+# capped, then ~400 (needs a restart).
+pg_settings:
+  listen_addresses: "'*'"
+  max_connections: 1000
+  shared_buffers: 16GB                 # 25% of db1's 64 GB
+  huge_pages: try
+  effective_cache_size: 48GB
+  work_mem: 32MB
+  maintenance_work_mem: 1GB
+  random_page_cost: 1.1
+  effective_io_concurrency: 200
+  wal_level: replica
+  wal_buffers: 64MB
+  wal_compression: lz4
+  max_wal_size: 4GB
+  min_wal_size: 1GB
+  checkpoint_completion_target: 0.9
+  max_wal_senders: 10
+  max_replication_slots: 10
+  max_slot_wal_keep_size: 80GB         # ~10 days of WAL for nas1's replica
+  max_worker_processes: 8
+  hot_standby: "on"
+  hot_standby_feedback: "on"           # the nightly pg_dump on the standby isn't cancelled by replay
+  shared_preload_libraries: "'pg_stat_statements'"
+  pg_stat_statements.track: top
+  pg_stat_statements.max: 10000
+  track_io_timing: "on"
+  # pgBackRest archives WAL once this server is the primary (a standby doesn't archive with "on").
+  archive_mode: "on"
+  archive_command: "'pgbackrest --stanza={{ pg_database }} archive-push %p'"
+  log_min_duration_statement: 2s
+  log_checkpoints: "on"
+  log_lock_waits: "on"
+  log_temp_files: 0
+
+# Clients arrive through hv1's relays, so every client's address is the bridge gateway.
+# Who may use each relay is enforced on hv1 (allow_from); roles and passwords do the rest.
+pg_hba_relay_cidr: 10.50.200.1/32
+
+# Huge pages for shared_buffers (16 GB + ~7% overhead, 2 MB pages). Postgres's shared memory is
+# shared_buffers plus ~1 GB (wal_buffers, lock and process tables at max_connections 1000).
+pg_nr_hugepages: 8800
+# Backends' OOM score (the postmaster gets -900 from the Debian unit).
+pg_oom_adjust_value: -500
+
+# db1's clock is UTC; backups run overnight here (dump 03:00, pgBackRest 03:30, nas1 04:30; nas1's snapshot 05:30).
+# Nothing at 01:00-03:00, which daylight saving changes skip or repeat.
+pg_timer_tz: UTC
+pg_dump_keep: 7
+pgbackrest_retention_full: 4      # weekly fulls kept -> ~4 weeks of point-in-time recovery
+
+# Streaming replica on nas1. The password is in the vault (vault_pg_replication_password).
+pg_replication_role: nas1_replica
+
+# Second pgBackRest repository: SFTP container on nas1 through relay nas1-backup.
+# Encrypted with vault_pgbackrest_repo2_cipher_pass. While nas1 is unreachable WAL stays in pg_wal (repo1 still
+# gets it) and is pushed when it returns.
+pgbackrest_repo2:
+  host: 10.50.200.1
+  port: 2222
+  user: pgbackup
+  path: /repo
+  key: /etc/pgbackrest-ssh/id_ed25519       # generated on db1; public half on nas1
+  host_fingerprint: "<sha256 hex of the SFTP host key>"
+  host_key: "ssh-ed25519 <host key>"
+  snapshot_max_age_hours: 26              # nas1 snapshots the repo daily; checked hourly
+  retention_full: 4

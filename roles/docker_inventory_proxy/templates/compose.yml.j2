@@ -1,0 +1,20 @@
+# {{ ansible_managed }}
+name: docker-inventory-proxy
+services:
+  proxy:
+    image: {{ dip_image }}
+    restart: unless-stopped
+    network_mode: host          # listens on {{ dip_listen_ip }}:{{ dip_port }} only
+    user: "0:0"                 # owns the socket's access; everything else is dropped
+    cap_drop: [ALL]
+    cap_add: [SETUID, SETGID]
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
+    command: ["nginx", "-g", "daemon off;", "-c", "/etc/nginx/dip.conf"]
+    volumes:
+      - ./nginx.conf:/etc/nginx/dip.conf:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    labels:
+      homarr.hide: "true"
+    logging: { driver: json-file, options: { max-size: 10m, max-file: "3" } }

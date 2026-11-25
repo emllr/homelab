@@ -1,0 +1,785 @@
+{
+  "uid": "homelab-security",
+  "title": "Security (Suricata \u00b7 CrowdSec \u00b7 SSH)",
+  "tags": [
+    "homelab",
+    "security"
+  ],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "schemaVersion": 39,
+  "links": [
+    {
+      "type": "dashboards",
+      "tags": [
+        "homelab"
+      ],
+      "asDropdown": true,
+      "title": "Homelab",
+      "includeVars": false,
+      "keepTime": true
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "sev",
+        "label": "Suricata severity",
+        "type": "custom",
+        "multi": true,
+        "includeAll": false,
+        "query": "1,2,3",
+        "options": [
+          {
+            "text": "1",
+            "value": "1",
+            "selected": true
+          },
+          {
+            "text": "2",
+            "value": "2",
+            "selected": true
+          },
+          {
+            "text": "3",
+            "value": "3",
+            "selected": true
+          }
+        ],
+        "current": {
+          "text": [
+            "1",
+            "2",
+            "3"
+          ],
+          "value": [
+            "1",
+            "2",
+            "3"
+          ]
+        }
+      },
+      {
+        "name": "host",
+        "label": "Host",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prom"
+        },
+        "query": {
+          "query": "label_values(node_uname_info, host_name)",
+          "refId": "host"
+        },
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Suricata (hv1: dmz, games, warp, obs bridges)",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Alerts by severity",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 70,
+            "lineWidth": 0,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "sev 1"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "sev 2"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "sev 3"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (sev) (count_over_time({service_name=\"suricata\"} | json event_type=\"event_type\", sev=\"alert.severity\", sig=\"alert.signature\", sid=\"alert.signature_id\", src=\"src_ip\", sport=\"src_port\", dst=\"dest_ip\", dport=\"dest_port\", proto=\"proto\", iface=\"in_iface\", cat=\"alert.category\" | __error__=\"\" | event_type=\"alert\" | sev=~\"$sev\" [$__auto]))",
+          "legendFormat": "sev {{sev}}",
+          "queryType": "range"
+        }
+      ],
+      "id": 2,
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 12,
+        "h": 7
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Alerts by interface",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 70,
+            "lineWidth": 0,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (iface) (count_over_time({service_name=\"suricata\"} | json event_type=\"event_type\", sev=\"alert.severity\", sig=\"alert.signature\", sid=\"alert.signature_id\", src=\"src_ip\", sport=\"src_port\", dst=\"dest_ip\", dport=\"dest_port\", proto=\"proto\", iface=\"in_iface\", cat=\"alert.category\" | __error__=\"\" | event_type=\"alert\" | sev=~\"$sev\" [$__auto]))",
+          "legendFormat": "{{iface}}",
+          "queryType": "range"
+        }
+      ],
+      "id": 3,
+      "gridPos": {
+        "x": 12,
+        "y": 1,
+        "w": 12,
+        "h": 7
+      }
+    },
+    {
+      "type": "table",
+      "title": "Signatures",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(30, sum by (sev, sid, sig) (count_over_time({service_name=\"suricata\"} | json event_type=\"event_type\", sev=\"alert.severity\", sig=\"alert.signature\", sid=\"alert.signature_id\", src=\"src_ip\", sport=\"src_port\", dst=\"dest_ip\", dport=\"dest_port\", proto=\"proto\", iface=\"in_iface\", cat=\"alert.category\" | __error__=\"\" | event_type=\"alert\" | sev=~\"$sev\" [$__range])))",
+          "instant": true,
+          "queryType": "instant",
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "sev": 0,
+              "sid": 1,
+              "sig": 2,
+              "Value": 3
+            },
+            "renameByName": {
+              "sev": "Sev",
+              "sid": "SID",
+              "sig": "Signature",
+              "Value": "Alerts"
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "Alerts",
+            "desc": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "id": 4,
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 14,
+        "h": 9
+      }
+    },
+    {
+      "type": "table",
+      "title": "Top talkers (alerts)",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(20, sum by (src, dst, dport, iface) (count_over_time({service_name=\"suricata\"} | json event_type=\"event_type\", sev=\"alert.severity\", sig=\"alert.signature\", sid=\"alert.signature_id\", src=\"src_ip\", sport=\"src_port\", dst=\"dest_ip\", dport=\"dest_port\", proto=\"proto\", iface=\"in_iface\", cat=\"alert.category\" | __error__=\"\" | event_type=\"alert\" | sev=~\"$sev\" [$__range])))",
+          "instant": true,
+          "queryType": "instant",
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "src": 0,
+              "dst": 1,
+              "dport": 2,
+              "iface": 3,
+              "Value": 4
+            },
+            "renameByName": {
+              "src": "Source",
+              "dst": "Destination",
+              "dport": "Port",
+              "iface": "Interface",
+              "Value": "Alerts"
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "Alerts",
+            "desc": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "id": 5,
+      "gridPos": {
+        "x": 14,
+        "y": 8,
+        "w": 10,
+        "h": 9
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Alerts",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "dedupStrategy": "none",
+        "showLabels": false,
+        "showCommonLabels": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service_name=\"suricata\"} | json event_type=\"event_type\", sev=\"alert.severity\", sig=\"alert.signature\", sid=\"alert.signature_id\", src=\"src_ip\", sport=\"src_port\", dst=\"dest_ip\", dport=\"dest_port\", proto=\"proto\", iface=\"in_iface\", cat=\"alert.category\" | __error__=\"\" | event_type=\"alert\" | sev=~\"$sev\" | line_format `sev {{.sev}}  {{.sig}}  {{.src}}:{{.sport}} \u2192 {{.dst}}:{{.dport}} {{.proto}}  ({{.iface}}, sid {{.sid}})`",
+          "queryType": "range"
+        }
+      ],
+      "id": 6,
+      "gridPos": {
+        "x": 0,
+        "y": 17,
+        "w": 24,
+        "h": 10
+      }
+    },
+    {
+      "id": 7,
+      "type": "row",
+      "title": "CrowdSec (web2, web3, web1, edge1)",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 27,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Detections by host and scenario",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 70,
+            "lineWidth": 0,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (host_name, scenario) (count_over_time({service_name=\"journald\"} | unit=\"crowdsec.service\" |= \"performed\" | regexp `Ip (?P<src_ip>\\S+) performed '(?P<scenario>[^']+)'` [$__auto]))",
+          "legendFormat": "{{host_name}} {{scenario}}",
+          "queryType": "range"
+        }
+      ],
+      "id": 8,
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "table",
+      "title": "Top attacking IPs",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(20, sum by (src_ip, host_name) (count_over_time({service_name=\"journald\"} | unit=\"crowdsec.service\" |= \"performed\" | regexp `Ip (?P<src_ip>\\S+) performed '(?P<scenario>[^']+)'` [$__range])))",
+          "instant": true,
+          "queryType": "instant",
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "src_ip": 0,
+              "host_name": 1,
+              "Value": 2
+            },
+            "renameByName": {
+              "src_ip": "IP",
+              "host_name": "Host",
+              "Value": "Detections"
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "Detections",
+            "desc": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "id": 9,
+      "gridPos": {
+        "x": 12,
+        "y": 28,
+        "w": 6,
+        "h": 8
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Active decisions",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value_and_name"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (host_name, origin) (cs_active_decisions)",
+          "legendFormat": "{{host_name}} {{origin}}",
+          "instant": true,
+          "queryType": "instant"
+        }
+      ],
+      "id": 10,
+      "gridPos": {
+        "x": 18,
+        "y": 28,
+        "w": 6,
+        "h": 8
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Detections and bans",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "dedupStrategy": "none",
+        "showLabels": false,
+        "showCommonLabels": false
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service_name=\"journald\"} | unit=\"crowdsec.service\" |~ \"performed '|ban on Ip\" | logfmt | line_format `{{ printf \"%-7s\" .host_name }} {{ .msg }}`",
+          "queryType": "range"
+        }
+      ],
+      "id": 11,
+      "gridPos": {
+        "x": 0,
+        "y": 36,
+        "w": 24,
+        "h": 8
+      }
+    },
+    {
+      "id": 12,
+      "type": "row",
+      "title": "SSH (edge1 is internet-facing)",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 44,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Failed / invalid logins",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 70,
+            "lineWidth": 0,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (host_name) (count_over_time({service_name=\"journald\"} | unit=~\"ssh.service|sshd.service\" | host_name=~\"$host\" |~ \"Invalid user|Failed password|authentication failure\" [$__auto]))",
+          "legendFormat": "{{host_name}}",
+          "queryType": "range"
+        }
+      ],
+      "id": 13,
+      "gridPos": {
+        "x": 0,
+        "y": 45,
+        "w": 12,
+        "h": 7
+      }
+    },
+    {
+      "type": "table",
+      "title": "Top sources",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(15, sum by (ip) (count_over_time({service_name=\"journald\"} | unit=~\"ssh.service|sshd.service\" | host_name=~\"$host\" |~ \"Invalid user|Failed password\" | regexp `from (?P<ip>[0-9a-fA-F.:]+) port` [$__range])))",
+          "instant": true,
+          "queryType": "instant",
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "ip": 0,
+              "Value": 1
+            },
+            "renameByName": {
+              "ip": "IP",
+              "Value": "Attempts"
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "Attempts",
+            "desc": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "id": 14,
+      "gridPos": {
+        "x": 12,
+        "y": 45,
+        "w": 6,
+        "h": 7
+      }
+    },
+    {
+      "type": "table",
+      "title": "Accepted logins",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (host_name, user, ip) (count_over_time({service_name=\"journald\"} | unit=~\"ssh.service|sshd.service\" | host_name=~\"$host\" |= \"Accepted\" | regexp `Accepted \\S+ for (?P<user>\\S+) from (?P<ip>\\S+)` [$__range]))",
+          "instant": true,
+          "queryType": "instant",
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "host_name": 0,
+              "user": 1,
+              "ip": 2,
+              "Value": 3
+            },
+            "renameByName": {
+              "host_name": "Host",
+              "user": "User",
+              "ip": "From",
+              "Value": "Logins"
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "Logins",
+            "desc": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "id": 15,
+      "gridPos": {
+        "x": 18,
+        "y": 45,
+        "w": 6,
+        "h": 7
+      }
+    }
+  ],
+  "editable": true,
+  "graphTooltip": 1
+}

@@ -1,0 +1,44 @@
+# {{ ansible_managed }}  (Loki single-binary, filesystem storage)
+auth_enabled: false
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  log_level: warn
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore: { store: inmemory }
+schema_config:
+  configs:
+    - from: 2026-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index: { prefix: index_, period: 24h }
+limits_config:
+  retention_period: {{ obs_retention.logs }}
+  # Defaults are 500 series / 1m / 5000 lines; dashboard tables grouped by message hit the series cap.
+  max_query_series: {{ obs_loki_max_query_series }}
+  query_timeout: {{ obs_loki_query_timeout }}
+  max_entries_limit_per_query: {{ obs_loki_max_entries }}
+  allow_structured_metadata: true
+  volume_enabled: true
+  otlp_config:
+    resource_attributes:
+      attributes_config:
+        - action: index_label
+          attributes: [telemetry.origin]
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
+pattern_ingester:
+  enabled: true
+analytics:
+  reporting_enabled: false

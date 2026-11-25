@@ -1,0 +1,85 @@
+---
+- name: Packages
+  community.general.pacman:
+    name: [smartmontools, msmtp, msmtp-mta, s-nail]   # s-nail: `mail`, used by smartd and ZED
+    state: present
+
+- name: Mail configuration
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/{{ item }}"
+    mode: '0644'
+  loop: [msmtprc, aliases.msmtp]
+
+- name: Gmail app password (fails if undefined; never blanked when empty)
+  ansible.builtin.copy:
+    content: "{{ vault_gmail_app_password }}\n"
+    dest: /etc/msmtp.pass
+    owner: root
+    group: root
+    mode: '0600'
+  when: vault_gmail_app_password | length > 0
+  no_log: true
+
+- name: disk-health script
+  ansible.builtin.template:
+    src: disk-health.py.j2
+    dest: /usr/local/sbin/disk-health
+    mode: '0755'
+
+- name: disk-health units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    mode: '0644'
+  loop:
+    - disk-health-check.service
+    - disk-health-check.timer
+    - disk-health-report.service
+    - disk-health-report.timer
+  register: disk_health_units
+
+- name: Scrub timer override directory
+  ansible.builtin.file:
+    path: "/etc/systemd/system/zfs-scrub-monthly@{{ disk_health_pool }}.timer.d"
+    state: directory
+    mode: '0755'
+
+- name: Scrub schedule
+  ansible.builtin.template:
+    src: scrub-timer-override.conf.j2
+    dest: "/etc/systemd/system/zfs-scrub-monthly@{{ disk_health_pool }}.timer.d/override.conf"
+    mode: '0644'
+  register: disk_health_scrub
+  notify: restart scrub timer
+
+- name: smartd configuration
+  ansible.builtin.template:
+    src: smartd.conf.j2
+    dest: /etc/smartd.conf
+    mode: '0644'
+  notify: restart smartd
+
+- name: ZED mails on finished scrubs too
+  ansible.builtin.lineinfile:
+    path: /etc/zfs/zed.d/zed.rc
+    regexp: '^#?ZED_NOTIFY_VERBOSE='
+    line: ZED_NOTIFY_VERBOSE=1
+  notify: restart zed
+
+- name: Reload systemd after unit changes
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: disk_health_units is changed or disk_health_scrub is changed
+
+- name: Enable services and timers
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - smartd.service
+    - zfs-zed.service
+    - "zfs-scrub-monthly@{{ disk_health_pool }}.timer"
+    - disk-health-check.timer
+    - disk-health-report.timer

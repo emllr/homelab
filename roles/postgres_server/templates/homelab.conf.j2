@@ -1,0 +1,5 @@
+# {{ ansible_managed }} (roles/postgres_server). Settings changed with ALTER SYSTEM
+# (postgresql.auto.conf) override these.
+{% for k, v in pg_settings.items() %}
+{{ k }} = {{ v }}
+{% endfor %}

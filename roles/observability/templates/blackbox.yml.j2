@@ -1,0 +1,12 @@
+# {{ ansible_managed }}
+modules:
+  https_2xx:
+    prober: http
+    timeout: 15s
+    http:
+      preferred_ip_protocol: ip4
+      follow_redirects: true          # www.example.com -> Cloudflare Access login (200)
+      fail_if_not_ssl: true
+      headers:
+        # exampleapp.com's WAF blocks HTTP-library user agents; identify honestly but browser-shaped.
+        User-Agent: "Mozilla/5.0 (compatible; homelab-uptime/1.0; blackbox-exporter)"

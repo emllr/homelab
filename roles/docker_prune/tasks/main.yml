@@ -1,0 +1,45 @@
+---
+- name: docker-prune script
+  ansible.builtin.template:
+    src: docker-prune.sh.j2
+    dest: /usr/local/sbin/docker-prune
+    mode: '0755'
+
+- name: docker-prune service and timer
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item.n }}"
+    mode: '0644'
+    content: "{{ item.c }}"
+  loop:
+    - n: docker-prune.service
+      c: |
+        # Managed by homelab (roles/docker_prune).
+        [Unit]
+        Description=Prune Docker build cache, dangling images and anonymous unused volumes
+        After=docker.service
+        Requires=docker.service
+        [Service]
+        Type=oneshot
+        Nice=10
+        IOSchedulingClass=idle
+        ExecStart=/usr/local/sbin/docker-prune
+    - n: docker-prune.timer
+      c: |
+        # Managed by homelab (roles/docker_prune).
+        [Unit]
+        Description=Weekly Docker prune
+        [Timer]
+        OnCalendar={{ docker_prune_on_calendar }}
+        RandomizedDelaySec=15m
+        Persistent=true
+        [Install]
+        WantedBy=timers.target
+  loop_control: { label: "{{ item.n }}" }
+  register: docker_prune_units
+
+- name: Enable the docker-prune timer
+  ansible.builtin.systemd:
+    name: docker-prune.timer
+    enabled: true
+    state: started
+    daemon_reload: "{{ docker_prune_units.changed }}"

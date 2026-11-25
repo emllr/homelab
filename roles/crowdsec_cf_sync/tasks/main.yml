@@ -1,0 +1,45 @@
+---
+- name: Config directory (keys inside are 0600 root; systemd passes them as credentials)
+  ansible.builtin.file: { path: /etc/crowdsec-cf-sync, state: directory, mode: '0755' }
+
+- name: Sync script
+  ansible.builtin.copy: { src: crowdsec-cf-sync.py, dest: /usr/local/bin/crowdsec-cf-sync, mode: '0755' }
+
+- name: Targets that have a token in the vault
+  ansible.builtin.set_fact:
+    cs_cf_tokens: "{{ crowdsec_cf_sync_targets | map(attribute='name')
+                      | select('in', vault_cloudflare_lists_tokens) | list }}"
+
+- name: LAPI keys
+  ansible.builtin.copy:
+    content: "{{ vault_crowdsec_lapi_keys[item.name] }}\n"
+    dest: "/etc/crowdsec-cf-sync/lapi-{{ item.name }}.key"
+    mode: '0600'
+  loop: "{{ crowdsec_cf_sync_lapis }}"
+  loop_control: { label: "{{ item.name }}" }
+  no_log: true
+  notify: run crowdsec-cf-sync
+
+- name: Cloudflare tokens
+  ansible.builtin.copy:
+    content: "{{ vault_cloudflare_lists_tokens[item] }}\n"
+    dest: "/etc/crowdsec-cf-sync/cf-{{ item }}.token"
+    mode: '0600'
+  loop: "{{ cs_cf_tokens }}"
+  no_log: true
+  notify: run crowdsec-cf-sync
+
+- name: Config
+  ansible.builtin.template: { src: config.json.j2, dest: /etc/crowdsec-cf-sync/config.json, mode: '0644' }
+  notify: run crowdsec-cf-sync
+
+- name: Service and timer
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    mode: '0644'
+  loop: [crowdsec-cf-sync.service, crowdsec-cf-sync.timer]
+  notify: run crowdsec-cf-sync
+
+- name: Timer enabled
+  ansible.builtin.systemd: { name: crowdsec-cf-sync.timer, enabled: true, state: started, daemon_reload: true }

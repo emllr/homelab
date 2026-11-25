@@ -1,0 +1,7 @@
+[Unit]
+Description=Disk and ZFS health check
+After=zfs.target network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/disk-health check

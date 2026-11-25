@@ -1,0 +1,47 @@
+---
+# Observability backend on obs1.
+obs_root: /srv/obs                     # data disk
+
+obs_images:
+  otelcol: otel/opentelemetry-collector-contrib:0.165.0
+  prometheus: prom/prometheus:v3.16.0
+  loki: grafana/loki:3.6.20
+  tempo: grafana/tempo:2.10.10          # 2.x: 3.0 removed the 2.x write path; migrate deliberately
+  grafana: grafana/grafana:13.3.0
+  node_exporter: prom/node-exporter:v1.12.1
+  blackbox: prom/blackbox-exporter:v0.28.0
+
+obs_retention:
+  logs: 744h        # 31 d
+  traces: 168h      # 7 d
+  metrics: 90d
+
+# One OTLP/HTTP receiver per origin. The port decides telemetry.origin; senders can't override it.
+obs_origins:
+  - { name: hv1,  port: 4318 }   # hypervisor agent, direct
+  - { name: dmz,  port: 4319 }   # via relay
+  - { name: data, port: 4325 }   # via relay
+
+# HTTPS with a certificate issued elsewhere and pushed to {{ obs_root }}/secrets/tls.
+obs_grafana_hostname: grafana.example.net
+obs_grafana_tls: true
+# Pages allowed to embed Grafana panels (Homarr on dash1). Empty = no embedding.
+obs_grafana_embed_origins:
+  - https://dash.example.net
+obs_grafana_root_url: "{{ 'https' if obs_grafana_tls else 'http' }}://{{ obs_grafana_hostname }}/"
+obs_ntfy_url: https://ntfy.example.net/homelab-alerts   # ntfy on edge1; token: vault_ntfy_grafana_token
+
+# Loki query limits (see loki.yaml.j2)
+obs_loki_max_query_series: 5000
+obs_loki_query_timeout: 3m
+obs_loki_max_entries: 10000
+# Public sites probed from obs1 every minute (blackbox exporter): alert if down 5 min or cert < 14 days.
+obs_probe_targets:
+  - https://www.example.com
+# ntfy priorities: severity=critical -> high (4), everything else -> low (2, no sound)
+obs_ntfy_priority_critical: 4
+obs_ntfy_priority_default: 2
+
+# Prometheus TSDB admin API (delete_series, clean_tombstones, snapshot). Off; turn on only
+# for a one-off cleanup: -e obs_prometheus_admin_api=true, then run again without it.
+obs_prometheus_admin_api: false

@@ -2,5 +2,8 @@
 *.log
 .vault_pass
 vault.yml
+homelab_secrets.yml
+__pycache__/
 host_vars/**/vault.yml
 group_vars/**/vault.yml
+.vscode/

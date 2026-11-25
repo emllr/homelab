@@ -1,0 +1,9 @@
+---
+- name: reload nginx
+  ansible.builtin.systemd: { name: nginx, state: reloaded }
+- name: reload apache
+  ansible.builtin.systemd: { name: apache2, state: reloaded }
+- name: restart crowdsec
+  ansible.builtin.systemd: { name: crowdsec, state: restarted }
+- name: reload lapi guard
+  ansible.builtin.systemd: { name: crowdsec-lapi-guard, state: reloaded, daemon_reload: true }

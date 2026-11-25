@@ -1,0 +1,30 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Mirror CrowdSec local bans into Cloudflare IP Lists
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/crowdsec-cf-sync /etc/crowdsec-cf-sync/config.json
+{% for l in crowdsec_cf_sync_lapis %}
+LoadCredential=lapi-{{ l.name }}:/etc/crowdsec-cf-sync/lapi-{{ l.name }}.key
+{% endfor %}
+{% for t in cs_cf_tokens %}
+LoadCredential=cf-{{ t }}:/etc/crowdsec-cf-sync/cf-{{ t }}.token
+{% endfor %}
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+MemoryMax=128M
+TimeoutStartSec=120

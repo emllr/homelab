@@ -1,0 +1,10 @@
+# {{ ansible_managed }} (roles/postgres_server)
+# TYPE  DATABASE        USER            ADDRESS                 METHOD
+local   all             postgres                                peer
+local   all             all                                     peer
+host    all             all             127.0.0.1/32            scram-sha-256
+host    all             all             ::1/128                 scram-sha-256
+# Clients through hv1's relays (dev1 and web1; see vm_isolation vm_relays).
+host    {{ pg_database }}      all             {{ pg_hba_relay_cidr }}        scram-sha-256
+# nas1's streaming replica. TLS only.
+hostssl replication     {{ pg_replication_role }}   {{ pg_hba_relay_cidr }}        scram-sha-256

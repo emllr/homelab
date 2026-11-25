@@ -1,0 +1,319 @@
+---
+# ---- disks (before the package, so the cluster it creates lands on the data disk) ----
+- name: Data and backup disks have a filesystem (ext4; only if blank)
+  ansible.builtin.shell: |
+    set -e
+    dev=$(readlink -f {{ item.dev }})
+    if blkid "$dev" >/dev/null 2>&1; then echo present; else mkfs.ext4 -q -L {{ item.label }} -m 1 "$dev"; echo created; fi
+  args: { executable: /bin/bash }
+  loop:
+    - { dev: "{{ pg_data_disk }}", label: pgdata }
+    - { dev: "{{ pg_backup_disk }}", label: pgbackup }
+  register: mkfs
+  changed_when: "'created' in mkfs.stdout"
+
+- name: Mount the disks
+  ansible.posix.mount:
+    path: "{{ item.path }}"
+    src: "LABEL={{ item.label }}"
+    fstype: ext4
+    opts: "{{ item.opts }}"
+    state: mounted
+  loop:
+    - { path: /var/lib/postgresql, label: pgdata, opts: "noatime,nofail,x-systemd.device-timeout=30s" }
+    - { path: "{{ pg_backup_mount }}", label: pgbackup, opts: "noatime,nofail,x-systemd.device-timeout=30s" }
+
+# ---- packages (PGDG) ----
+- name: PGDG signing key
+  ansible.builtin.get_url:
+    url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
+    dest: /usr/share/keyrings/pgdg.asc
+    mode: '0644'
+
+- name: PGDG apt repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/pgdg.sources
+    mode: '0644'
+    content: |
+      Types: deb
+      URIs: https://apt.postgresql.org/pub/repos/apt
+      Suites: trixie-pgdg
+      Components: main
+      Signed-By: /usr/share/keyrings/pgdg.asc
+
+- name: Postgres {{ pg_version }}, JIT, pgBackRest
+  ansible.builtin.apt:
+    name: ["postgresql-{{ pg_version }}", "postgresql-{{ pg_version }}-jit", "postgresql-client-{{ pg_version }}", pgbackrest, zstd]
+    update_cache: true
+    state: present
+
+- name: Ownership of the mounted disks
+  ansible.builtin.file: { path: "{{ item }}", state: directory, owner: postgres, group: postgres, mode: '0750' }
+  loop: [/var/lib/postgresql, "{{ pg_backup_mount }}", "{{ pg_backup_mount }}/repo", "{{ pg_backup_mount }}/dumps", /var/spool/pgbackrest, /var/log/pgbackrest]
+
+# ---- kernel / systemd ----
+- name: Huge pages for shared_buffers
+  ansible.posix.sysctl:
+    name: vm.nr_hugepages
+    value: "{{ pg_nr_hugepages }}"
+    sysctl_file: /etc/sysctl.d/60-postgres.conf
+    reload: true
+
+- name: systemd drop-in directory for postgresql@
+  ansible.builtin.file: { path: /etc/systemd/system/postgresql@.service.d, state: directory, mode: '0755' }
+
+- name: Backends OOM-protected too (the postmaster already gets -900)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/postgresql@.service.d/oom.conf
+    mode: '0644'
+    content: |
+      [Service]
+      Environment=PG_OOM_ADJUST_VALUE={{ pg_oom_adjust_value }}
+  register: oomdrop
+
+# The backup disk is nofail, so nothing ordered Postgres after it: at boot WAL archiving failed until it mounted.
+# Ordering only (no Requires): Postgres must still start if the backup disk is missing.
+- name: Start Postgres after the backup disk is mounted
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/postgresql@.service.d/backup-mount.conf
+    mode: '0644'
+    content: |
+      [Unit]
+      After={{ pg_backup_mount | regex_replace('^/', '') | replace('/', '-') }}.mount
+  register: mountdrop
+
+- name: systemd daemon-reload
+  ansible.builtin.systemd: { daemon_reload: true }
+  when: oomdrop.changed or mountdrop.changed
+
+# ---- configuration ----
+- name: Settings (conf.d)
+  ansible.builtin.template:
+    src: homelab.conf.j2
+    dest: "/etc/postgresql/{{ pg_version }}/{{ pg_cluster }}/conf.d/homelab.conf"
+    owner: postgres
+    group: postgres
+    mode: '0644'
+  notify: reload postgres
+
+- name: pg_hba
+  ansible.builtin.template:
+    src: pg_hba.conf.j2
+    dest: "/etc/postgresql/{{ pg_version }}/{{ pg_cluster }}/pg_hba.conf"
+    owner: postgres
+    group: postgres
+    mode: '0640'
+  notify: reload postgres
+
+# The SCRAM verifier is computed here, so the password never appears in SQL (logs, pg_stat_statements).
+- name: Replication role for nas1's replica (created once; primary only)
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import base64, hashlib, hmac, os, subprocess, sys
+        pw, role = sys.stdin.read().strip().encode(), sys.argv[1]
+        q = lambda sql: subprocess.run(["runuser", "-u", "postgres", "--", "psql", "-XAtq", "-v", "ON_ERROR_STOP=1"],
+                                       input=sql, text=True, check=True, capture_output=True).stdout.strip()
+        if q("select pg_is_in_recovery()") == "t" or q(f"select 1 from pg_roles where rolname = '{role}'"):
+            sys.exit()
+        it, salt, b = 4096, os.urandom(16), lambda x: base64.b64encode(x).decode()
+        sp = hashlib.pbkdf2_hmac("sha256", pw, salt, it)
+        stored = hashlib.sha256(hmac.digest(sp, b"Client Key", "sha256")).digest()
+        v = f"SCRAM-SHA-256${it}:{b(salt)}${b(stored)}:{b(hmac.digest(sp, b'Server Key', 'sha256'))}"
+        q(f"create role {role} login replication connection limit 4 password '{v}'")
+        print("created")
+      - "{{ pg_replication_role }}"
+    stdin: "{{ vault_pg_replication_password }}"
+  no_log: true
+  register: replrole
+  changed_when: "'created' in replrole.stdout"
+
+- name: pgBackRest configuration
+  ansible.builtin.template:
+    src: pgbackrest.conf.j2
+    dest: /etc/pgbackrest.conf
+    owner: postgres
+    group: postgres
+    mode: '0640'
+  diff: false      # holds the repo2 passphrase
+  register: brconf
+
+- name: Initialise the stanza in new repositories (no-op where it exists; primary only)
+  ansible.builtin.command:
+    argv: [runuser, -u, postgres, --, /bin/sh, -c, 'test "$(psql -XAtc "select pg_is_in_recovery()")" = t || pgbackrest --stanza={{ pg_database }} stanza-create']
+  when: brconf.changed
+  changed_when: true
+
+# ---- nightly logical dump (works on a standby too; pgBackRest covers PITR once primary) ----
+- name: Nightly pg_dump service and timer
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item.n }}"
+    mode: '0644'
+    content: "{{ item.c }}"
+  loop:
+    - n: pg-dump-nightly.service
+      c: |
+        [Unit]
+        Description=pg_dump of {{ pg_database }} to {{ pg_backup_mount }}/dumps ({{ pg_dump_keep }} kept)
+        After=postgresql.service
+        [Service]
+        Type=oneshot
+        User=postgres
+        Nice=10
+        IOSchedulingClass=idle
+        ExecStart=/bin/bash -c 'set -euo pipefail; d={{ pg_backup_mount }}/dumps; f=$d/{{ pg_database }}-$(date +%%Y%%m%%d-%%H%%M).dump; pg_dump -Fc -Z zstd:3 -d {{ pg_database }} -f "$f.part" && mv "$f.part" "$f"; ls -1t $d/{{ pg_database }}-*.dump | tail -n +{{ pg_dump_keep + 1 }} | xargs -r rm -f'
+    - n: pg-dump-nightly.timer
+      c: |
+        [Unit]
+        Description=Nightly pg_dump of {{ pg_database }}
+        [Timer]
+        OnCalendar=*-*-* 03:00 {{ pg_timer_tz }}
+        RandomizedDelaySec=10m
+        Persistent=true
+        [Install]
+        WantedBy=timers.target
+  loop_control: { label: "{{ item.n }}" }
+  register: dumpunits
+
+- name: Enable the dump timer
+  ansible.builtin.systemd: { name: pg-dump-nightly.timer, enabled: true, state: started, daemon_reload: "{{ dumpunits.changed }}" }
+
+# ---- pgBackRest scheduled backups (primary only; WAL is archived continuously) ----
+- name: pgBackRest backup services and timers (full Sunday, differential other days)
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item.n }}"
+    mode: '0644'
+    content: "{{ item.c }}"
+  loop:
+    - n: pgbackrest-backup@.service
+      c: |
+        [Unit]
+        Description=pgBackRest %i backup of {{ pg_database }}
+        After=postgresql.service
+        [Service]
+        Type=oneshot
+        User=postgres
+        Nice=10
+        IOSchedulingClass=idle
+        # Skips quietly on a standby (backups run on the primary).
+        ExecCondition=/bin/sh -c 'test "$(psql -XAtc "select pg_is_in_recovery()")" = f'
+        ExecStart=/usr/bin/pgbackrest --stanza={{ pg_database }} --type=%i backup
+    - n: pgbackrest-backup-nas1@.service
+      c: |
+        [Unit]
+        Description=pgBackRest %i backup of {{ pg_database }} to nas1 (repo2)
+        After=postgresql.service network-online.target
+        [Service]
+        Type=oneshot
+        User=postgres
+        Nice=10
+        IOSchedulingClass=idle
+        ExecCondition=/bin/sh -c 'test "$(psql -XAtc "select pg_is_in_recovery()")" = f'
+        ExecStart=/usr/bin/pgbackrest --stanza={{ pg_database }} --repo=2 --type=%i backup
+    - n: pgbackrest-nas1-full.timer
+      c: |
+        [Unit]
+        Description=Weekly full pgBackRest backup to nas1
+        [Timer]
+        OnCalendar=Sun *-*-* 04:30 {{ pg_timer_tz }}
+        Persistent=true
+        Unit=pgbackrest-backup-nas1@full.service
+        [Install]
+        WantedBy=timers.target
+    - n: pgbackrest-nas1-diff.timer
+      c: |
+        [Unit]
+        Description=Daily differential pgBackRest backup to nas1
+        [Timer]
+        OnCalendar=Mon..Sat *-*-* 04:30 {{ pg_timer_tz }}
+        Persistent=true
+        Unit=pgbackrest-backup-nas1@diff.service
+        [Install]
+        WantedBy=timers.target
+    - n: pgbackrest-full.timer
+      c: |
+        [Unit]
+        Description=Weekly full pgBackRest backup
+        [Timer]
+        OnCalendar=Sun *-*-* 03:30 {{ pg_timer_tz }}
+        Persistent=true
+        Unit=pgbackrest-backup@full.service
+        [Install]
+        WantedBy=timers.target
+    - n: pgbackrest-diff.timer
+      c: |
+        [Unit]
+        Description=Daily differential pgBackRest backup
+        [Timer]
+        OnCalendar=Mon..Sat *-*-* 03:30 {{ pg_timer_tz }}
+        Persistent=true
+        Unit=pgbackrest-backup@diff.service
+        [Install]
+        WantedBy=timers.target
+  loop_control: { label: "{{ item.n }}" }
+  register: brunits
+
+- name: nas1 SFTP host key for the snapshot check
+  ansible.builtin.copy:
+    dest: /etc/pgbackrest-ssh/known_hosts
+    mode: '0644'
+    content: "[{{ pgbackrest_repo2.host }}]:{{ pgbackrest_repo2.port }} {{ pgbackrest_repo2.host_key }}\n"
+
+- name: nas1 snapshot check script
+  ansible.builtin.copy:
+    dest: /usr/local/bin/nas1-snapshot-check
+    mode: '0755'
+    content: |
+      #!/bin/bash
+      # Fails if nas1's newest snapshot of the backup repo is too old or can't be read (Grafana alert pg-nas1-snapshots).
+      set -uo pipefail
+      f=$(mktemp); trap 'rm -f "$f"' EXIT
+      for try in 1 2 3; do
+        sftp -q -b - -P {{ pgbackrest_repo2.port }} -i {{ pgbackrest_repo2.key }} -o ConnectTimeout=15 -o StrictHostKeyChecking=yes \
+          -o UserKnownHostsFile=/etc/pgbackrest-ssh/known_hosts {{ pgbackrest_repo2.user }}@{{ pgbackrest_repo2.host }} \
+          <<<"get /status/last-snapshot $f" >/dev/null && break
+        [ $try = 3 ] && { echo "SNAPSHOT CHECK FAILED: can't read /status/last-snapshot on nas1"; exit 1; }
+        sleep 20
+      done
+      read -r t count name < "$f"
+      [[ "${t:-}" =~ ^[0-9]+$ ]] || { echo "SNAPSHOT CHECK FAILED: unreadable status"; exit 1; }
+      age=$(( ($(date +%s) - t) / 3600 ))
+      (( age < {{ pgbackrest_repo2.snapshot_max_age_hours }} )) || { echo "SNAPSHOT CHECK FAILED: newest snapshot $name is $age h old"; exit 1; }
+      echo "ok: $name, $age h old, $count kept"
+
+- name: nas1 snapshot check service and timer
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item.n }}"
+    mode: '0644'
+    content: "{{ item.c }}"
+  loop:
+    - n: nas1-snapshot-check.service
+      c: |
+        [Unit]
+        Description=Check that nas1 still snapshots the pgBackRest repo
+        After=network-online.target
+        [Service]
+        Type=oneshot
+        User=postgres
+        ExecStart=/usr/local/bin/nas1-snapshot-check
+    - n: nas1-snapshot-check.timer
+      c: |
+        [Unit]
+        Description=Hourly nas1 snapshot check
+        [Timer]
+        OnCalendar=hourly
+        RandomizedDelaySec=2m
+        Persistent=true
+        [Install]
+        WantedBy=timers.target
+  loop_control: { label: "{{ item.n }}" }
+  register: snapunits
+
+- name: Enable the nas1 snapshot check
+  ansible.builtin.systemd: { name: nas1-snapshot-check.timer, enabled: true, state: started, daemon_reload: "{{ snapunits.changed }}" }
+
+- name: Enable the pgBackRest timers
+  ansible.builtin.systemd: { name: "{{ item }}", enabled: true, state: started, daemon_reload: "{{ brunits.changed }}" }
+  loop: [pgbackrest-full.timer, pgbackrest-diff.timer, pgbackrest-nas1-full.timer, pgbackrest-nas1-diff.timer]

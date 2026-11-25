@@ -1,0 +1,188 @@
+#!/usr/bin/python3
+"""disk-health check|report|status  - hv1 disk/ZFS monitor.
+check:  mail only on new problems, weekly reminders, and recovery.
+report: always mail (monthly). status: print, never mail."""
+import json, os, re, socket, subprocess, sys, time
+
+TO = "root"                      # resolved through /etc/aliases
+STATE = os.environ.get("DH_STATE", "/var/lib/disk-health/state.json")
+MAIL = os.environ.get("DH_MAIL", "/usr/bin/sendmail")
+SPACE_WARN, SPACE_CRIT = {{ disk_health_space_warn }}, {{ disk_health_space_crit }}  # percent used
+TEMP_HDD, TEMP_NVME = {{ disk_health_temp_hdd }}, {{ disk_health_temp_nvme }}
+SCRUB_MAX_DAYS = {{ disk_health_scrub_max_days }}
+REMIND = 7 * 86400
+BAD_ATTRS = {5: "reallocated sectors", 187: "reported uncorrectable",
+             197: "pending sectors", 198: "offline uncorrectable"}
+problems, lines = {}, []         # problems: stable key -> message
+
+
+def run(*cmd):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return subprocess.CompletedProcess(cmd, 127, "", str(e))
+
+
+def smart():
+    lines.append("DRIVES")
+    r = run("lsblk", "-dJno", "NAME,TYPE")
+    try:
+        devs = [d["name"] for d in json.loads(r.stdout)["blockdevices"]
+                if d["type"] == "disk" and re.match(r"sd|nvme", d["name"])]
+    except (ValueError, KeyError):
+        devs = []
+    if not devs:
+        problems["smart:none"] = "No drives could be enumerated"
+    for n in devs:
+        r = run("smartctl", "-j", "-x", "/dev/" + n)
+        try:
+            j = json.loads(r.stdout)
+            passed = j["smart_status"]["passed"]
+        except (ValueError, KeyError):
+            problems["smart:read:" + n] = f"{n}: SMART data could not be read"
+            lines.append(f"  {n}: SMART UNREADABLE")
+            continue
+        key = j.get("serial_number", n)
+        who = f"{n} {j.get('model_name', '?')} [{key}]"
+        bad = []
+        if not passed:
+            bad.append("SMART overall health FAILED")
+        for a in j.get("ata_smart_attributes", {}).get("table", []):
+            if a["id"] in BAD_ATTRS and a["raw"]["value"]:
+                bad.append(f"{a['raw']['value']} {BAD_ATTRS[a['id']]}")
+            if a.get("when_failed") == "now":
+                bad.append(f"attribute {a['name']} failing now")
+        nv = j.get("nvme_smart_health_information_log", {})
+        if nv:
+            if nv["critical_warning"]:
+                bad.append(f"NVMe critical warning {nv['critical_warning']:#x}")
+            if nv["media_errors"]:
+                bad.append(f"{nv['media_errors']} media errors")
+            if nv["available_spare"] < nv["available_spare_threshold"]:
+                bad.append("available spare below threshold")
+            if nv["percentage_used"] >= 90:
+                bad.append(f"{nv['percentage_used']}% of rated life used")
+        tests = j.get("ata_smart_self_test_log", {})
+        for log in tests.values():
+            if not isinstance(log, dict):
+                continue
+            t = (log.get("table") or [None])[0]
+            if t and t["status"].get("passed") is False:
+                bad.append("latest self-test: " + t["status"]["string"])
+        temp = j.get("temperature", {}).get("current")
+        if temp is not None and temp >= (TEMP_NVME if nv else TEMP_HDD):
+            problems["smart:temp:" + key] = f"{who}: {temp} C is too hot"
+        hours = j.get("power_on_time", {}).get("hours", "?")
+        life = f", {nv['percentage_used']}% life used" if nv else ""
+        lines.append(f"  {who}: {'OK' if not bad else 'PROBLEM'}, {temp} C, {hours} h{life}")
+        for b in bad:
+            # digits removed so a changing count does not alter the key
+            problems[f"smart:{key}:{re.sub('[0-9]+', '', b)}"] = f"{who}: {b}"
+
+
+def space(key, name, pct):
+    lines.append(f"  {name}: {pct}% used")
+    if pct >= SPACE_CRIT:
+        problems[key + ":crit"] = f"{name} is {pct}% full (critical)"
+    elif pct >= SPACE_WARN:
+        problems[key + ":warn"] = f"{name} is {pct}% full"
+
+
+def zfs():
+    lines.append("ZFS")
+    want = os.environ.get("DH_POOLS", "{{ disk_health_pool }}").split()
+    r = run("zpool", "list", "-Hpo", "name,health,capacity")
+    pools = {p[0]: p for p in (l.split("\t") for l in r.stdout.splitlines()) if len(p) == 3}
+    for name in sorted(set(want) | set(pools)):
+        if name not in pools:
+            problems["zfs:missing:" + name] = f"Pool {name} is not imported"
+            continue
+        _, health, cap = pools[name]
+        st = run("zpool", "status", "-p", name).stdout
+        lines.append(f"  {name}: {health}")
+        if health != "ONLINE":
+            problems["zfs:health:" + name] = f"Pool {name} is {health}"
+        if "errors: No known data errors" not in st:
+            problems["zfs:data:" + name] = f"Pool {name} reports data errors"
+        for m in re.finditer(r"^\t\s*(\S+)\s+[A-Z]+\s+(\d+)\s+(\d+)\s+(\d+)", st, re.M):
+            if any(int(x) for x in m.groups()[1:]):
+                problems[f"zfs:errors:{name}:{m[1]}"] = \
+                    f"{name}/{m[1]} read/write/checksum errors: {m[2]}/{m[3]}/{m[4]}"
+        scan = re.search(r"scan: (.*)", st)
+        scan = scan[1] if scan else "never scrubbed"
+        lines.append(f"    {scan}")
+        m = re.search(r"(?:scrub repaired|resilvered).* on (.+)$", scan)
+        if m:
+            try:
+                age = (time.time() - time.mktime(time.strptime(m[1].strip(), "%a %b %d %H:%M:%S %Y"))) / 86400
+                if age > SCRUB_MAX_DAYS:
+                    problems["zfs:scrub:" + name] = f"Pool {name}: last scrub/resilver finished {age:.0f} days ago"
+            except ValueError:
+                problems["zfs:scrub:" + name] = f"Pool {name}: cannot read scrub date: {scan}"
+        elif "in progress" not in scan:
+            problems["zfs:scrub:" + name] = f"Pool {name}: no completed scrub ({scan})"
+        space("space:" + name, name, int(cap))
+
+
+def btrfs_and_space():
+    lines.append("SYSTEM DISK")
+    for l in run("btrfs", "device", "stats", "/").stdout.splitlines():
+        f = l.split()
+        if len(f) == 2 and f[1] != "0":
+            problems["btrfs:" + f[0]] = f"btrfs {f[0]} = {f[1]}"
+    for mp in ("/", "/boot"):
+        s = os.statvfs(mp)
+        used = s.f_blocks - s.f_bfree
+        space("space:" + mp, mp, round(100 * used / (used + s.f_bavail)))
+
+
+def services():
+    for u in ("smartd.service", "zfs-zed.service"):
+        if run("systemctl", "is-active", "--quiet", u).returncode:
+            problems["svc:" + u] = f"{u} is not running"
+
+
+def send(subject, body):
+    host = socket.gethostname()
+    msg = f"To: {TO}\nSubject: [{host}] {subject}\nContent-Type: text/plain; charset=utf-8\n\n{body}\n\nFrom {host}\n"
+    r = subprocess.run([MAIL, TO], input=msg, text=True, capture_output=True, timeout=120)
+    if r.returncode:
+        sys.exit(f"mail failed, will retry next run: {r.stderr.strip()}")
+
+
+def main():
+    mode = sys.argv[1] if len(sys.argv) > 1 else "status"
+    if mode not in ("check", "report", "status"):
+        sys.exit(__doc__)
+    smart(); zfs(); btrfs_and_space(); services()
+    detail = "\n".join(lines)
+    plist = "\n".join("  ! " + m for m in problems.values())
+    if mode == "status":
+        print(("PROBLEMS\n" + plist if problems else "No problem detected.") + "\n\n" + detail)
+    elif mode == "report":
+        verdict = f"{len(problems)} problem(s)" if problems else "Healthy"
+        send("Monthly drive health report - " + verdict,
+             ("PROBLEMS\n" + plist if problems else "No problem detected with the drives.") + "\n\n" + detail)
+    else:
+        try:
+            with open(STATE) as f:
+                old = json.load(f)
+        except (OSError, ValueError):
+            old = {}
+        now = time.time()
+        due = [k for k in problems if now - old.get(k, {}).get("sent", 0) >= REMIND]
+        gone = [v["msg"] for k, v in old.items() if k not in problems]
+        if due:
+            send("Disk problem: " + problems[due[0]] + (f" (+{len(due)-1} more)" if len(due) > 1 else ""),
+                 "PROBLEMS\n" + plist + "\n\n" + detail)
+        elif gone:
+            send("Disk problem cleared", "\n".join("  cleared: " + g for g in gone) +
+                 ("\n\nSTILL OPEN\n" + plist if problems else "") + "\n\n" + detail)
+        new = {k: {"msg": m, "sent": now if k in due else old[k]["sent"]} for k, m in problems.items()}
+        os.makedirs(os.path.dirname(STATE), exist_ok=True)
+        with open(STATE + ".tmp", "w") as f:
+            json.dump(new, f)
+        os.replace(STATE + ".tmp", STATE)
+
+
+main()
